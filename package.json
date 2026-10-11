@@ -1,7 +1,7 @@
 {
   "name": "opencode-sesh",
   "version": "2.0.2",
-  "description": "Browse, search, preview and resume opencode sessions from the terminal and the TUI.",
+  "description": "OpenCode session browser: search, preview, and resume every session across every project from the terminal or TUI.",
   "type": "module",
   "license": "MIT",
   "author": "Ozan Dogrultan",
@@ -19,7 +19,9 @@
     "session-browser",
     "fzf",
     "tui",
-    "cli"
+    "cli",
+    "opencode-plugin",
+    "opencode-tui"
   ],
   "exports": {
     ".": "./plugins/sesh-list.ts",
