@@ -1,6 +1,6 @@
 # sesh
 
-[![CI](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml/badge.svg)](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml)
+[![CI](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml/badge.svg)](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/opencode-sesh)](https://www.npmjs.com/package/opencode-sesh)
 
 **An [OpenCode V2](https://opencode.ai/v2/) plugin and terminal session browser.** Search every session
 across every project, preview the transcript, and resume in place — from your
