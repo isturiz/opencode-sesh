@@ -2,11 +2,9 @@
 
 [![CI](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml/badge.svg)](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/opencode-sesh)](https://www.npmjs.com/package/opencode-sesh)
 
-**An [OpenCode V2](https://opencode.ai/v2/) plugin and terminal session browser.** Search every session
+**An [OpenCode](https://opencode.ai) plugin and terminal session browser.** Search every session
 across every project, preview the transcript, and resume in place — from your
 terminal or from inside the TUI.
-
-The TUI plugin and agent tool require OpenCode V2 and are not compatible with V1.
 
 `opencode` keeps a growing pile of sessions, and its native lists (`<leader>l`,
 `/sessions`) are scoped to the current project. `sesh` shows all of them —
@@ -38,9 +36,10 @@ search…
   subagent child sessions are hidden by default.
 - **Pin what matters.** Ctrl-S pins a session and Ctrl-D pins its directory in
   either picker; the TUI sidebar and home list use Option-S and Option-R.
-  Pins are shared and persist across restarts. Pinned directories rise first;
-  pinned sessions sort first in the terminal picker and home list. The TUI picker
-  and sidebar keep sessions within each directory recency-ordered.
+  Pins are shared and persist across restarts. Pinned directories rise first
+  (followed by directories containing pinned sessions in the TUI picker);
+  pinned sessions sort first in the terminal picker and home list, while the
+  TUI picker and sidebar keep sessions within each directory ordered by recency.
 - **Full-text search.** Type to match against session titles *and* the text of
   the conversation itself. Reasoning and tool output are excluded, so the index
   stays clean.
@@ -59,7 +58,7 @@ search…
 
 ### OpenCode plugin
 
-Add the package to `plugins` in your OpenCode V2 `opencode.json` (server tool)
+Add the package to `plugins` in your `opencode.json` (server tool)
 and `cli.json` (TUI panel):
 
 ```json
@@ -71,7 +70,7 @@ and `cli.json` (TUI panel):
 OpenCode installs the package and loads its server tool and TUI panel. The
 published panel is precompiled (`dist/tui.js`) because OpenCode does not apply
 its Solid transform to sources under `node_modules`. Merge this entry with your
-existing plugins. Remove the copied
+existing plugins. Remove any copied
 `./tui-plugins/sesh-panel` registration and `plugins/sesh-list.ts` tool before
 switching to avoid loading them twice.
 
@@ -95,15 +94,15 @@ bash install.sh
 `sesh install` (or `bash install.sh`) links `sesh` into `$XDG_BIN_HOME`
 (default `~/.local/bin`), copies
 the `sesh_list` tool and the TUI panel into
-`${XDG_CONFIG_HOME:-~/.config}/opencode`, registers the panel in `opencode.json`, and
+`${XDG_CONFIG_HOME:-~/.config}/opencode`, registers `./tui-plugins/sesh-panel` in `opencode.json`, and
 declares the plugin dependencies (opencode installs them on next start). The
-panel registers the `/sesh` slash command. It never edits your shell rc, and any
-file it would overwrite is backed up first.
+panel registers the `/sesh` slash command. It never edits your shell rc or
+overwrites a foreign `sesh` symlink.
 
 The npm package ships the same scripts and installer; the runtime tools below
 are still required.
 
-V2 reloads plugins when watched configuration files change. If a panel update
+OpenCode reloads plugins when watched configuration files change. If a panel update
 does not appear, fully quit opencode and reopen it. Upgrades
 refresh an already-installed panel automatically (the npm `postinstall` syncs
 it), and `sesh --check` reports when the installed panel is out of date.
@@ -122,7 +121,7 @@ option+o          # inside opencode — picker
 ### Requirements
 
 - [opencode](https://opencode.ai), used at least once
-- `bash`, `jq`, and [`fzf`](https://github.com/junegunn/fzf) `>= 0.73`
+- `bash`, `jq`, and [`fzf`](https://github.com/junegunn/fzf) (modern stock build; run `sesh --check` to verify)
 - `sqlite3` — the picker queries the session DB directly
 - [`glow`](https://github.com/charmbracelet/glow) optional — styles the
   transcript preview as Markdown; without it the preview shows the plain
@@ -168,11 +167,8 @@ confirms first and a non-TTY run needs `--yes`.
 
 `sesh costs [--days N] [--json]` sums assistant-message cost per project, with a
 recent window beside the lifetime total, so a day's work reads as a
-per-project record. Legacy V1 history is included when available; sessions
-already present in V2 are counted only once.
-
-Session browsing uses the V2 store. Sessions remaining only in the legacy V1
-tables are not listed or resumable through sesh.
+per-project record. Earlier history tables are included when present in the
+database, and sessions are counted only once.
 
 When searching, title matches outrank transcript-only matches and the current
 project rises, so the list answers "where was that thing I worked on" before it
@@ -228,7 +224,7 @@ Click the sidebar's `search…` box to filter sessions in place; click
 elsewhere or press Esc to leave search. Click the **Sessions** heading to drive
 the list from the keyboard instead of the mouse (`↑`/`↓` to move, Enter to open,
 Option-P to preview, Option-S to pin a session, Option-R to pin its directory,
-Option-D to arm deletion, Esc to leave). Press Option-D again or `y` to confirm
+Option-D to arm deletion, Esc to leave). Press Option-D again, `y`, or Enter to confirm
 an armed deletion; `n` or Esc cancels. Pinned
 directories rise first, while sessions within each directory are ordered by
 last update, newest first. The section lists every session and scrolls to fill
@@ -248,10 +244,10 @@ replace the picker's Ctrl-S/Ctrl-D bindings; Option-S in the picker filters pins
 
 ### Transcript search and needs-input triage
 
-The full picker pages through your whole global session list (no fixed window)
+The full picker pages through your global session list
 and indexes transcript text for every session in the background, showing
-indexing progress under the search box. It only stops at a safety cap of 5,000
-sessions, and says so when it does. Transcript matches show a short excerpt
+indexing progress under the search box (and noting if the safety cap is reached).
+Transcript matches show a short excerpt
 under the result; the Project, Needs input, and Pinned filters combine with
 search. The picker remembers your query and filters until you restart opencode.
 The Needs input dialog (`/sesh-needs`) shows why and how long each session has
@@ -281,8 +277,8 @@ workspace, and a global "resume from anywhere" hotkey — all caller-side.
 
 ## How it works
 
-The `bin/` readers use the V2 opencode session
-store (SQLite: `session_v2` / `session_message`). Each refresh extracts session
+The `bin/` readers query the opencode session
+store in SQLite (`session_v2` / `session_message`). Each refresh extracts session
 metadata and text-only parts into a persistent per-session cache keyed on
 `time_updated`, message count and the latest message timestamp, then atomically
 publishes a `snapshot.jsonl`. Every keystroke re-renders that snapshot with `jq`
@@ -290,14 +286,14 @@ alone, so typing never starts competing database scans. Reasoning and tool
 payloads are never indexed or previewed, and session ids are validated before
 any SQL interpolation.
 
-Flat scripts back the terminal UI — the picker (`sesh.sh`), the refresh engine
-(`sesh-list.sh`, driven by a per-picker `sesh-refresh-worker.sh` that serializes
-scans), preview renderer (`sesh-preview.sh`), deleter (`sesh-delete.sh`) and
-shortcut help (`sesh-shortcuts.sh`). The TUI panel (`tui-plugins/sesh-panel/tui.tsx`) is a
-SolidJS OpenTUI plugin that talks to the opencode SDK over the same store; the
-npm package ships it precompiled as `dist/tui.js`. The
-`sesh_list` agent tool reads the store read-only through `bun:sqlite`. V2 discovers
-the installed tool automatically in the global config directory's `plugins/`.
+Flat scripts in `bin/` back the terminal UI and CLI subcommands — the picker,
+serialized refresh worker, preview renderer, pin store, deleter, pruner,
+waiting-session check, cost digest, and shortcut help. The TUI panel
+(`tui-plugins/sesh-panel/tui.tsx`) is a SolidJS OpenTUI plugin that talks to the
+opencode SDK over the same store; the npm package ships it precompiled as
+`dist/tui.js`. The `sesh_list` agent tool reads the store read-only through
+`bun:sqlite` and is discovered automatically from the global config directory's
+`plugins/`.
 
 ## FAQ
 
@@ -328,7 +324,7 @@ checks before opening a PR:
 ```bash
 bun install
 bun run test         # builds dist/tui.js, then the fixture-database regression suite
-bun run test:picker  # PTY picker suite (needs fzf >= 0.73)
+bun run test:picker  # PTY picker suite
 bun run typecheck    # tsc over tui-plugins/ and plugins/
 bun run lint:sh      # bash -n on every script
 ```

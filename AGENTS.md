@@ -11,16 +11,16 @@ territory: read this first, then the specific file you need.
    any terminal. Lists **all** sessions across **all** project directories,
    full-text searchable, with transcript preview and resume/fork/delete.
 2. **`tui-plugins/sesh-panel/tui.tsx`** — a SolidJS/OpenTUI plugin for the opencode TUI: a
-   sessions section in the sidebar plus an `option+o` / `/sesh` picker.
+   sessions section in the sidebar and on the home screen, plus an `option+o` / `/sesh` picker.
 3. **`plugins/sesh-list.ts`** — the `sesh_list` custom tool, so the agent
    can list sessions across every directory by querying the global opencode
    SQLite store (the native `opencode session list` is project-scoped).
 
 No iTerm2, no AppleScript, no panes, no window management — **never add any.**
-The one exception is the TUI's right-click action, which shells out to
+The one exception is the TUI's right-click workspace action, which shells out to
 `cmux new-workspace` when running inside cmux.
-opencode has no persistent-sidebar API, so the "sidebar" is a `sidebar_content`
-slot section plus an xlarge modal picker; the terminal UI is fullscreen fzf.
+opencode has no persistent-sidebar API, so the TUI uses `sidebar_content` and
+`home_bottom` slot sections plus an xlarge modal picker; the terminal UI is fullscreen fzf.
 
 ## Start here
 
@@ -29,7 +29,7 @@ bun install            # dev deps (TypeScript, opencode/OpenTUI types)
 bun run build          # compile the panel to dist/tui.js
 bun run test           # build + fixture-DB regression suite — must stay green
 bun run test:changelog # release-tooling regressions (scripts/changelog.sh)
-bun run test:picker    # PTY picker suite (needs fzf >= 0.73)
+bun run test:picker    # PTY picker suite
 bun run typecheck      # tsc over tui-plugins/ and plugins/
 bun run lint:sh        # bash -n on every script
 HOME=/tmp/fakehome bash install.sh   # installer smoke test (never touches ~/.config)
@@ -40,7 +40,8 @@ HOME=/tmp/fakehome bash install.sh   # installer smoke test (never touches ~/.co
 - `bin/` — flat; no subdirs. Scripts resolve siblings from their own location.
   Never hardcode install paths. `sesh-waiting.sh` owns the needs-input query
   (shared heuristic with the TUI sidebar copy, marked `NEEDS_INPUT_SQL` in
-  both); `sesh-prune.sh` deletes stale sessions; `sesh-costs.sh` sums
+  both); `sesh-pins.sh` manages persistent session/directory pins;
+  `sesh-prune.sh` deletes stale sessions; `sesh-costs.sh` sums
   assistant-message cost per directory. Reads go through `sqlite3 -readonly`
   (required; `opencode db` no longer exists). Sesh never writes the database
   directly; deletes go through `opencode session delete`.
@@ -65,13 +66,13 @@ The tool name in opencode is `sesh_list`. Do not rename it without updating the 
 
 `bin/sesh-list.sh` owns the fzf picker's session store access (opencode SQLite
 DB: `session_v2` / `session_message` tables); the `sesh_list` agent tool queries
-the same store read-only through `bun:sqlite`. V2 discovers the tool from the
+the same store read-only through `bun:sqlite`. OpenCode discovers the tool from the
 global config directory's `plugins/`. Keep its SQL column names in sync with
 the schema below. Keystrokes never touch the database:
 
 - `--refresh` (expensive): bulk-reads session metadata and per-session text
   parts, validates the persistent extraction cache
-  (`$SESH_CACHE_DIR/extractions/<ses_*.json>`, schema 3) against `time_updated`,
+  (`$SESH_CACHE_DIR/extractions/<ses_*.json>`) against `time_updated`,
   message count and the latest message timestamp, re-extracts only changed sessions,
   prunes vanished ones, and atomically publishes `STATE_DIR/snapshot.jsonl`.
   Extraction reads user `data.text` and assistant `data.content` text entries,
@@ -98,8 +99,10 @@ the schema below. Keystrokes never touch the database:
   `ctrl+d` itself (composer delete-char, session delete), so ctrl pins would
   shadow the composer. Pinned directories sort before groups
   containing pinned sessions. The terminal picker puts pinned sessions first
-  inside each group; the TUI picker and sidebar keep sessions recency-ordered
-  within each directory. The home list puts pinned sessions first.
+  inside each group; the TUI picker ranks pinned sessions first before filtering
+  and keeps sessions within each directory ordered by recency; the sidebar keeps
+  sessions within each directory ordered by recency; the home list puts pinned
+  sessions first.
 
 **Output contract** (TSV, 6 fields):
 `agentId  sessionId  liveState  display  cwd  trackingId`. `display` is the only
@@ -107,8 +110,8 @@ rendered column; `trackingId` is fzf's `--id-nth`. Headers/notices carry an
 empty `sessionId` and are a selection no-op — keep that guard.
 
 One worker (`sesh-refresh-worker.sh`, per picker, TERMed on exit) serializes
-scans; fzf's `start`/`every(3)`/`change` bindings render only. Selection requests
-a fresh poll (`request`/`wait`, ≤12 s) before dispatch — skipped for `--print`,
+scans; fzf's `start`/`every(...)`/`change` bindings render only. Selection requests
+a fresh poll (`request`/`wait`) before dispatch — skipped for `--print`,
 which is a pure snapshot lookup — and prints a progress line to stderr while it
 waits, because fzf has already exited and the terminal is idle. opencode has no
 live-agent API, so `liveState` is always `unknown` and rows render gray unless
@@ -132,14 +135,14 @@ when opencode exits, the picker reopens with the query preserved.
   `sqlite3 -json` in `-R` mode; it pretty-prints — parse as JSON.
 - `jq -R` output stays JSON-quoted: use `-Rr` when a shell variable needs the
   raw string.
-- fzf: stock only, `>= 0.73` (`transform:`, `every():`). `{q}` in binds is
+- fzf: stock only (`transform:`, `every():`). `{q}` in binds is
   shell-quoted by fzf — don't add quoting. Ctrl-G is bind-only (stays open);
   Ctrl-F is `--expect` (accepts with fork). A `transform-header` inside a chained
   action must come **before** `reload`/`reload-sync`: placed after, fzf silently
-  publishes an empty list (verified on 0.74.3).
+  publishes an empty list.
 - Destructive actions confirm. `sesh-delete.sh` prompts on a TTY and refuses
   without `--yes` when stdin is not one; the TUI arms on the first Option-D and
-  commits on the second (or `y`).
+  commits on the second, `y`, or Enter.
 - The installer prefers the local opencode version for `@opencode/*` and
   merges (never clobbers) the config `package.json`; opencode runs `bun install`
   at startup.
@@ -154,13 +157,18 @@ when opencode exits, the picker reopens with the query preserved.
 
 ## TUI panel (`tui-plugins/sesh-panel/tui.tsx`)
 
-- **Sidebar:** `api.slots.register` on `sidebar_content` (prepend mode — native
-  sidebar content stays). Pinned directories sort first, then directory groups
+- **Sidebar & Home list:** `api.slots.register` on `sidebar_content` (`sidebar.content`
+  prepend mode — native sidebar content stays) and `home_bottom` (`home.footer`
+  prepend mode). In the sidebar, pinned directories sort first, then directory groups
   by recency; sessions within each group sort by last update regardless of pins.
+  In the home list, pinned sessions sort first.
   Row markers alone signal session state: a running agent animates a loading
   spinner marker, the open session shows its own ●, and every other idle row
-  stays neutral (polled every 15 s); Option-P previews
-  a row and option+d deletes one (armed, then confirmed). The section lists every
+  stays neutral (polled periodically); Option-P previews
+  a row and option+d deletes one (armed, then confirmed). Right-clicking a
+  sidebar row opens an action context menu (open, preview, cmux workspace when
+  inside cmux, fork, pin/unpin, delete); right-clicking a home or picker row
+  opens the session in a new cmux workspace. The sidebar section lists every
   session without a row cap and flex-grows to fill the sidebar, with overflow
   scrolling inside; the picker remains the place for transcript search.
   Sessions waiting on the user (unanswered questions, stuck runs) pin a
@@ -174,7 +182,7 @@ when opencode exits, the picker reopens with the query preserved.
   `api.client.session.fork`; Ctrl-G scopes the list to the selected session's
   project.
 - **Picker search:** pages the global session list (`SESSION_PAGE_LIMIT`, capped
-  at `SESSION_MAX` and reported when truncated) instead of a fixed 500-row
+  at `SESSION_MAX` and reported when truncated) rather than a fixed-size
   window, then indexes transcript text for **every** session in batches
   (`TRANSCRIPT_BATCH`) with bounded remote concurrency (`REMOTE_CONCURRENCY`).
   The header shows indexing progress/coverage. Visible transcript hits get
@@ -184,7 +192,7 @@ when opencode exits, the picker reopens with the query preserved.
   `/sesh-needs` uses the shared needs-input set plus the oldest unresolved
   question or running-tool timestamp, lists longest-waiting first, and `n`
   opens the next waiting session. `tests/tui.mjs` locks the data layer.
-- **Durable install:** V2 reloads plugins on watched configuration changes;
+- **Durable install:** OpenCode reloads plugins on watched configuration changes;
   unwatched dependencies may need a restart. If a panel update does not appear,
   fully quit/reopen opencode. `install.sh --sync-panel`
   (run by the `postinstall`) refreshes an already-installed panel and is a
@@ -229,8 +237,8 @@ when opencode exits, the picker reopens with the query preserved.
   (`tests/tui.mjs` asserts the cap stays out); overflow scrolls inside the
   stretched section.
 - **Delete in the TUI is two-step.** The first `option+d` arms `pendingDelete`,
-  the second (or `y`, or Enter in the picker footer) commits the armed row
-  wherever the pointer or cursor is, and `n`/Esc (or a five-second timeout)
+  the second (or `y`, or Enter) commits the armed row
+  wherever the pointer or cursor is, and `n`/Esc (or a timeout)
   cancels. Moving the pointer must never disarm: edge-hover flicker ate the
   confirm before `confirmArmed` landed. The `y`/`n` layer is registered *only
   while armed*, so it can never shadow the search box's typing.
@@ -247,7 +255,7 @@ when opencode exits, the picker reopens with the query preserved.
 - `bun run test:changelog` — release-tooling regressions; builds its own git
   history in a temp dir (included in `bun run test`).
 - `bun run test:picker` — PTY suite driving the real fzf picker (needs fzf
-  `>= 0.73` and Python 3).
+  and Python 3).
 - `bun run typecheck` — `tsc` over `tui-plugins/` and `plugins/`.
 - `bun run lint:sh` — `bash -n` on every script.
 - `HOME=/tmp/fakehome bash install.sh` — installer smoke test.

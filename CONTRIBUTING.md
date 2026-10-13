@@ -21,9 +21,11 @@ test` and `npm pack` run it for you).
 Run the full check suite and make sure it passes:
 
 ```bash
-bun run test         # builds dist/tui.js, then the fixture-database regression suite
-bun run typecheck    # tsc over tui-plugins/ and plugins/
-bun run lint:sh      # bash -n on every script
+bun run test           # builds dist/tui.js, then the fixture-database and changelog suites
+bun run test:changelog # release-tooling regressions (scripts/changelog.sh)
+bun run test:picker    # PTY picker suite
+bun run typecheck      # tsc over tui-plugins/ and plugins/
+bun run lint:sh        # bash -n on every script
 ```
 
 Also smoke-test the installer without touching your real config:
@@ -79,7 +81,7 @@ Examples:
 feat(tui): open the picker with option+o
 fix(preview): show the newest transcript messages first
 docs: document the glow fallback
-feat!: drop support for opencode < 1.18
+feat!: drop support for legacy session tables
 ```
 
 The type maps to the next version bump (`feat` → minor, `fix`/`perf` → patch,
@@ -111,11 +113,11 @@ uses GitHub-generated release notes.
 it does not bump the package version, commit, tag, or publish:
 
 ```bash
-scripts/changelog.sh draft          # classify commits since the last tag (prints only)
-scripts/changelog.sh release 0.2.0  # write a dated section and compare link
-scripts/changelog.sh notes 0.2.0    # the release-notes body for a version
-scripts/changelog.sh notes          # the latest released version
-scripts/changelog.sh check          # structure: headings and compare links
+scripts/changelog.sh draft              # classify commits since the last tag (prints only)
+scripts/changelog.sh release <version>  # write a dated section and compare link
+scripts/changelog.sh notes <version>    # the release-notes body for a version
+scripts/changelog.sh notes              # the latest released version
+scripts/changelog.sh check              # structure: headings and compare links
 ```
 
 `bun run test:changelog` covers the tooling, and `check` also runs in CI: every
