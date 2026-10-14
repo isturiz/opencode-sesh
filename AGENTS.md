@@ -58,6 +58,7 @@ HOME=/tmp/fakehome bash install.sh   # installer smoke test (never touches ~/.co
 - `scripts/changelog.sh` — release tooling: drafts conventional commits,
   writes a dated version, prints release notes and
   checks the compare links. `tests/changelog.sh` covers it in a throwaway repo.
+- `assets/` — README logo (`logo.svg`) and square mark (`icon.svg`); wordmark is outlined paths, no font dependency.
 - `themes/`, `tests/`, `install.sh`, `README.md`.
 
 The tool name in opencode is `sesh_list`. Do not rename it without updating the docs.

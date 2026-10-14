@@ -1,4 +1,6 @@
-# sesh
+<h1 align="center">
+  <img src="assets/logo.svg" alt="sesh" height="96">
+</h1>
 
 [![CI](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml/badge.svg)](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/opencode-sesh)](https://www.npmjs.com/package/opencode-sesh)
 

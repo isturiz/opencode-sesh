@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="sesh">
+<title>sesh</title>
+<style>
+.tile{fill:#15171e}.edge{fill:none;stroke:#2c303b;stroke-width:2}
+.branch{fill:none;stroke:#5b6170;stroke-width:6;stroke-linecap:round;stroke-linejoin:round}
+.dot{fill:none;stroke:#8b92a3;stroke-width:4.5}.bar{fill:#3d4250}
+.dot-on{fill:#ff9e3d}.bar-on{fill:#e8eaf0}
+.word{fill:#1b1f27}
+@media (prefers-color-scheme: dark){.word{fill:#eef0f5}.edge{stroke:#3a3f4c}}
+</style>
+<g transform="translate(0 0)">
+<rect width="128" height="128" rx="30" class="tile"/>
+<rect x="1" y="1" width="126" height="126" rx="29" class="edge"/>
+<path d="M26 20V78Q26 92 40 92H44M26 36H44M26 64H44" class="branch"/>
+<circle cx="55" cy="36" r="7" class="dot"/>
+<rect x="72" y="31" width="30" height="10" rx="5" class="bar"/>
+<circle cx="55" cy="64" r="7" class="dot"/>
+<rect x="72" y="59" width="22" height="10" rx="5" class="bar"/>
+<circle cx="55" cy="92" r="9" class="dot-on"/>
+<rect x="72" y="87" width="34" height="10" rx="5" class="bar-on"/>
+</g>
+</svg>
