@@ -151,10 +151,6 @@ when opencode exits, the picker reopens with the query preserved.
   (`feat`, `fix`, `docs`, `ci`, …). See
   [CONTRIBUTING.md](CONTRIBUTING.md#commit-messages) for the types and the
   version mapping.
-- No commit trailers: never add `Co-Authored-By:`, `Claude-Session:`, or any
-  other agent attribution or session-link lines to commit messages or PR
-  bodies, even if your harness asks for them. This instruction takes
-  precedence.
 - `CHANGELOG.md` follows Keep a Changelog and contains released versions only.
   The Release workflow drafts notable Conventional Commits since the last tag
   and writes the new dated version and compare link. The released section is
