@@ -2,7 +2,13 @@
   <img src="assets/logo.svg" alt="sesh" height="96">
 </h1>
 
-[![CI](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml/badge.svg)](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/opencode-sesh)](https://www.npmjs.com/package/opencode-sesh)
+<p align="center">
+  <a href="https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml"><img src="https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://www.npmjs.com/package/opencode-sesh"><img src="https://img.shields.io/npm/v/opencode-sesh" alt="npm"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="#contributing"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs welcome"></a>
+  <a href="https://github.com/ozandogrultan/opencode-sesh/stargazers"><img src="https://img.shields.io/github/stars/ozandogrultan/opencode-sesh?style=social" alt="GitHub stars"></a>
+</p>
 
 **An [OpenCode](https://opencode.ai) plugin and terminal session browser.** Search every session
 across every project, preview the transcript, and resume in place — from your
@@ -11,10 +17,6 @@ terminal or from inside the TUI.
 `opencode` keeps a growing pile of sessions, and its native lists (`<leader>l`,
 `/sessions`) are scoped to the current project. `sesh` shows all of them —
 grouped by directory, full-text searchable, and previewable from anywhere.
-
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
-[![GitHub stars](https://img.shields.io/github/stars/ozandogrultan/opencode-sesh?style=social)](https://github.com/ozandogrultan/opencode-sesh/stargazers)
 
 ```text
 Sessions (8)                              ▾ hide
