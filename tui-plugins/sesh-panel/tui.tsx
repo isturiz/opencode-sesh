@@ -2507,7 +2507,9 @@ const tui: TuiPlugin = async (api) => {
       priority: 1,
       bindings: [
         { key: "up", desc: "Previous session", preventDefault: true, cmd: () => moveCursor(-1) },
+        { key: "ctrl+p", desc: "Previous session", preventDefault: true, cmd: () => moveCursor(-1) },
         { key: "down", desc: "Next session", preventDefault: true, cmd: () => moveCursor(1) },
+        { key: "ctrl+n", desc: "Next session", preventDefault: true, cmd: () => moveCursor(1) },
         { key: "pageup", desc: "Page up", preventDefault: true, cmd: () => moveCursor(-10) },
         { key: "pagedown", desc: "Page down", preventDefault: true, cmd: () => moveCursor(10) },
         { key: "home", desc: "First session", preventDefault: true, cmd: () => selectCursor(0) },
