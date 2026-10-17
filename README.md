@@ -257,7 +257,8 @@ Transcript matches show a short excerpt
 under the result; the Project, Needs input, and Pinned filters combine with
 search. The picker remembers your query and filters until you restart opencode.
 The Needs input dialog (`/sesh-needs`) shows why and how long each session has
-been waiting, oldest first. Press `n` there to open the next waiting session,
+been waiting, oldest first. Use ↑/↓ or Ctrl-P/Ctrl-N to navigate and Enter to
+open the selected session. Press `n` there to open the next waiting session,
 or reopen it after answering one to continue through the list.
 
 ## Configuration

@@ -173,30 +173,36 @@ function loadAdapter(ctx) {
   assert.match(source, /if \(!command && api.renderer.currentFocusedEditor === null\) return/)
 }
 
-// The custom picker must offer the same Ctrl-P/Ctrl-N navigation as OpenCode's
+// Custom session lists must offer the same Ctrl-P/Ctrl-N navigation as OpenCode's
 // native dialogs without removing arrows or capturing keys outside the modal.
 {
   const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
-  const start = source.indexOf("const disposeNav = api.keymap.registerLayer")
-  const end = source.indexOf("const cleanup =", start)
-  assert.ok(start >= 0 && end > start, "could not locate picker navigation bindings")
-  let layer
-  const moves = []
-  new Function("api", "moveCursor", "togglePreview", "handleEscape", source.slice(start, end))(
-    { keymap: { registerLayer(value) { layer = value; return () => {} } } },
-    (delta) => moves.push(delta),
-    () => {},
-    () => {},
-  )
-  assert.equal(layer.mode, "modal")
-  for (const [key, delta] of [["up", -1], ["ctrl+p", -1], ["down", 1], ["ctrl+n", 1]]) {
-    const binding = layer.bindings.find((binding) => binding.key === key)
-    assert.ok(binding, `picker must bind ${key}`)
-    assert.equal(binding.preventDefault, true, `${key} must not reach the search input`)
-    binding.cmd()
-    assert.equal(moves.at(-1), delta, `${key} must move in the expected direction`)
+  for (const [name, markerText, endText] of [
+    ["picker", 'desc: "Toggle project scope"', "const cleanup ="],
+    ["needs-input dialog", 'desc: "Open next waiting session"', "const home ="],
+  ]) {
+    const marker = source.indexOf(markerText)
+    const start = source.lastIndexOf("const disposeNav = api.keymap.registerLayer", marker)
+    const end = source.indexOf(endText, start)
+    assert.ok(marker >= 0 && start >= 0 && end > marker, `could not locate ${name} navigation bindings`)
+    let layer
+    const moves = []
+    new Function("api", "moveCursor", "togglePreview", "handleEscape", source.slice(start, end))(
+      { keymap: { registerLayer(value) { layer = value; return () => {} } } },
+      (delta) => moves.push(delta),
+      () => {},
+      () => {},
+    )
+    assert.equal(layer.mode, "modal")
+    for (const [key, delta] of [["up", -1], ["ctrl+p", -1], ["down", 1], ["ctrl+n", 1]]) {
+      const binding = layer.bindings.find((binding) => binding.key === key)
+      assert.ok(binding, `${name} must bind ${key}`)
+      assert.equal(binding.preventDefault, true, `${key} must be consumed by the modal`)
+      binding.cmd()
+      assert.equal(moves.at(-1), delta, `${key} must move in the expected direction`)
+    }
+    assert.deepEqual(moves, [-1, -1, 1, 1])
   }
-  assert.deepEqual(moves, [-1, -1, 1, 1])
 }
 
 {

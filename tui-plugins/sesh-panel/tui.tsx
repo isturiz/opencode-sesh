@@ -3038,7 +3038,9 @@ const tui: TuiPlugin = async (api) => {
       mode: "modal",
       bindings: [
         { key: "up", desc: "Previous session", preventDefault: true, cmd: () => moveCursor(-1) },
+        { key: "ctrl+p", desc: "Previous session", preventDefault: true, cmd: () => moveCursor(-1) },
         { key: "down", desc: "Next session", preventDefault: true, cmd: () => moveCursor(1) },
+        { key: "ctrl+n", desc: "Next session", preventDefault: true, cmd: () => moveCursor(1) },
         { key: "enter", desc: "Open session", preventDefault: true, cmd: () => choose() },
         { key: "n", desc: "Open next waiting session", preventDefault: true, cmd: () => {
           const at = items.findIndex((item) => item.entry.id === currentID)
