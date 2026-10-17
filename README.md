@@ -198,7 +198,8 @@ non-interactive `sesh-delete.sh` refuses unless given `--yes`.
 | `/sesh-needs` | Sessions waiting on you (Enter opens) |
 | `option+o` | Open the full picker (also in the command palette) |
 | Type | Search titles, directories and transcript text |
-| `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` | Move the selection |
+| `↑`/`↓` or Ctrl-P/Ctrl-N | Move the selection up/down |
+| `PgUp`/`PgDn`, `Home`/`End` | Move by page or jump to the first/last session |
 | Option-P | Toggle the transcript preview |
 | Enter | Open the selected session |
 | Option-D | Arm deletion; press Option-D again, `y`, or Enter to confirm |
@@ -214,7 +215,8 @@ Option-O opens the picker globally; the other keys above apply inside it.
 The picker groups sessions under collapsible directory headings (click ▾/▸).
 Mouse-wheel scrolling moves through the tree without changing the selection
 under a stationary pointer. Option-P opens a full-size transcript preview over
-the picker; use ↑/↓ to preview other sessions, then Esc to return to the list.
+the picker; use ↑/↓ or Ctrl-P/Ctrl-N to preview other sessions, then Esc to
+return to the list.
 Right-click a sidebar session to open its action menu: open, preview, fork,
 pin/unpin, or delete with confirmation. Inside cmux, the menu also offers opening
 the session in a new workspace at its directory. Use ↑/↓ and Enter to choose an
@@ -255,7 +257,8 @@ Transcript matches show a short excerpt
 under the result; the Project, Needs input, and Pinned filters combine with
 search. The picker remembers your query and filters until you restart opencode.
 The Needs input dialog (`/sesh-needs`) shows why and how long each session has
-been waiting, oldest first. Press `n` there to open the next waiting session,
+been waiting, oldest first. Use ↑/↓ or Ctrl-P/Ctrl-N to navigate and Enter to
+open the selected session. Press `n` there to open the next waiting session,
 or reopen it after answering one to continue through the list.
 
 ## Configuration
