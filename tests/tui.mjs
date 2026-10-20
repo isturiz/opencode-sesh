@@ -173,6 +173,35 @@ function loadAdapter(ctx) {
   assert.match(source, /if \(!command && api.renderer.currentFocusedEditor === null\) return/)
 }
 
+// Hiding the session sidebar must not register its component (and therefore
+// its polling or keyboard captures), or disable the home list and commands.
+{
+  for (const [options, visible] of [[undefined, true], [{}, true], [{ showSidebar: true }, true], [{ showSidebar: false }, false]]) {
+    const slots = []
+    const layers = []
+    const api = loadAdapter({
+      options,
+      ui: { slot(slot) { slots.push(slot) } },
+      keymap: { layer(factory) { layers.push(factory()) } },
+    })
+    const sidebar = () => { throw new Error("sidebar must not mount during registration") }
+    const home = () => {}
+    api.slots.register({ slots: { sidebar_content: sidebar, home_bottom: home } })
+    assert.deepEqual(slots.map((slot) => slot.prepend), visible ? ["sidebar.content", "home.footer"] : ["home.footer"])
+    assert.equal(slots.at(-1).render, home)
+    if (visible) assert.equal(slots[0].render, sidebar)
+
+    api.command.register(() => [
+      { title: "Sessions", value: "sesh", slash: { name: "sesh" }, onSelect() {} },
+      { title: "Costs", value: "sesh-costs", slash: { name: "sesh-costs" }, onSelect() {} },
+      { title: "Needs input", value: "sesh-needs", slash: { name: "sesh-needs" }, onSelect() {} },
+    ])
+    api.keymap.registerLayer({ bindings: [{ key: "alt+o", cmd() {} }] })
+    assert.deepEqual(layers[0].commands.map((command) => command.slash.name), ["sesh", "sesh-costs", "sesh-needs"])
+    assert.equal(layers[1].commands[0].bind, "alt+o")
+  }
+}
+
 // Custom session lists must offer the same Ctrl-P/Ctrl-N navigation as OpenCode's
 // native dialogs without removing arrows or capturing keys outside the modal.
 {
