@@ -229,7 +229,9 @@ workspace at its directory; outside cmux it shows a toast instead.
 `showSidebar` (boolean, default: `true`) controls whether the **Sessions** section
 appears in the sidebar. Set it to `false` to hide the section while keeping the
 home list, session picker, and other commands available. OpenCode's native sidebar
-is unaffected. Configure it in `cli.json`:
+is unaffected. In `cli.json`, replace the existing `"opencode-sesh"` string entry
+with the object below; do not add a second entry. Keep other plugin entries and
+the `opencode.json` entry unchanged:
 
 ```json
 {
