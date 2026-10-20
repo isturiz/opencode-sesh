@@ -3332,7 +3332,7 @@ function createApi(ctx: Plugin.Context) {
     },
     slots: {
       register(cfg: { order?: number; slots: Record<string, () => any> }) {
-        if (cfg.slots.sidebar_content) {
+        if (cfg.slots.sidebar_content && ctx.options?.showSidebar !== false) {
           ctx.ui.slot({
             prepend: "sidebar.content",
             render: cfg.slots.sidebar_content as any,
