@@ -159,7 +159,8 @@ when opencode exits, the picker reopens with the query preserved.
 ## TUI panel (`tui-plugins/sesh-panel/tui.tsx`)
 
 - **Sidebar & Home list:** `api.slots.register` on `sidebar_content` (`sidebar.content`
-  prepend mode — native sidebar content stays) and `home_bottom` (`home.footer`
+  append mode by default — native sidebar content stays above Sessions;
+  `sidebarPlacement: "prepend"` puts Sessions first) and `home_bottom` (`home.footer`
   prepend mode). In the sidebar, pinned directories sort first, then directory groups
   by recency; sessions within each group sort by last update regardless of pins.
   In the home list, pinned sessions sort first.

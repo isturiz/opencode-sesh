@@ -226,6 +226,10 @@ workspace at its directory; outside cmux it shows a toast instead.
 
 ### TUI sidebar and home list
 
+`sidebarPlacement` (`"append"` or `"prepend"`, default: `"append"`) places the
+**Sessions** section below or above OpenCode's native sidebar sections. With
+`"append"`, native todos appear above Sessions when available.
+
 `showSidebar` (boolean, default: `true`) controls whether the **Sessions** section
 appears in the sidebar. Set it to `false` to hide the section while keeping the
 home list, session picker, and other commands available. OpenCode's native sidebar
@@ -238,7 +242,7 @@ the `opencode.json` entry unchanged:
   "plugins": [
     {
       "package": "opencode-sesh",
-      "options": { "showSidebar": false }
+      "options": { "showSidebar": true, "sidebarPlacement": "append" }
     }
   ]
 }

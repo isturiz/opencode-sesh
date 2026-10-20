@@ -154,7 +154,7 @@ function loadAdapter(ctx) {
   assert.deepEqual(layers.map((l) => l.mode), ["modal", "base"])
   assert.ok(layers.every((l) => l.commands.every((c) => c.id === undefined)))
   api.slots.register({ slots: { sidebar_content() {} } })
-  assert.equal(slots[0].prepend, "sidebar.content")
+  assert.equal(slots[0].append, "sidebar.content")
   api.ui.toast({ title: "Costs", message: "Loaded" })
   api.ui.toast({ message: "Loaded" })
   assert.deepEqual(toasts.map((t) => t.title), ["Costs", "Sessions"])
@@ -176,7 +176,17 @@ function loadAdapter(ctx) {
 // Hiding the session sidebar must not register its component (and therefore
 // its polling or keyboard captures), or disable the home list and commands.
 {
-  for (const [options, visible] of [[undefined, true], [{}, true], [{ showSidebar: true }, true], [{ showSidebar: false }, false]]) {
+  for (const [options, visible, placement] of [
+    [undefined, true, "append"],
+    [{}, true, "append"],
+    [{ showSidebar: true }, true, "append"],
+    [{ showSidebar: false }, false, "append"],
+    [{ sidebarPlacement: "append" }, true, "append"],
+    [{ sidebarPlacement: "prepend" }, true, "prepend"],
+    [{ showSidebar: false, sidebarPlacement: "append" }, false, "append"],
+    [{ showSidebar: false, sidebarPlacement: "prepend" }, false, "prepend"],
+    [{ sidebarPlacement: "invalid" }, true, "append"],
+  ]) {
     const slots = []
     const layers = []
     const api = loadAdapter({
@@ -187,9 +197,14 @@ function loadAdapter(ctx) {
     const sidebar = () => { throw new Error("sidebar must not mount during registration") }
     const home = () => {}
     api.slots.register({ slots: { sidebar_content: sidebar, home_bottom: home } })
-    assert.deepEqual(slots.map((slot) => slot.prepend), visible ? ["sidebar.content", "home.footer"] : ["home.footer"])
+    assert.deepEqual(slots.map((slot) => slot.append ?? slot.prepend), visible ? ["sidebar.content", "home.footer"] : ["home.footer"])
+    assert.equal(slots.at(-1).prepend, "home.footer")
     assert.equal(slots.at(-1).render, home)
-    if (visible) assert.equal(slots[0].render, sidebar)
+    if (visible) {
+      assert.equal(slots[0][placement], "sidebar.content")
+      assert.equal(slots[0][placement === "append" ? "prepend" : "append"], undefined)
+      assert.equal(slots[0].render, sidebar)
+    }
 
     api.command.register(() => [
       { title: "Sessions", value: "sesh", slash: { name: "sesh" }, onSelect() {} },
