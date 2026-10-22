@@ -604,7 +604,7 @@ for option in --limit --query --state-dir --wait-lock --selected-id; do
   grep -Fq -- "$option requires an argument" "$fixture/arg-error"
 done
 for option in --limit --query; do
-  if "$PACKAGE_DIR/bin/sesh.sh" "$option" >/dev/null 2> "$fixture/arg-error"; then echo "accepted missing picker $option argument" >&2; exit 1; fi
+  if SESH_FZF="$fzf_stub" "$PACKAGE_DIR/bin/sesh.sh" "$option" >/dev/null 2> "$fixture/arg-error"; then echo "accepted missing picker $option argument" >&2; exit 1; fi
   grep -Fq -- "$option requires an argument" "$fixture/arg-error"
 done
 printf '{"scope":"","limit":-1}\n' > "$fixture/missing-state/settings.json"
