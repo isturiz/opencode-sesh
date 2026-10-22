@@ -11,7 +11,6 @@
 #   --json     machine-readable rows
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENCODE_BIN=${SESH_OPENCODE:-opencode}
 days=1
 emit_json=0

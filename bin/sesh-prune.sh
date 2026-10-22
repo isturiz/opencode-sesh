@@ -70,11 +70,14 @@ query() { "$SQLITE_BIN" -json -readonly "$DB_PATH" "$1"; }
 JQ_BIN=${SESH_JQ:-$(command -v jq || true)}
 [ -n "$JQ_BIN" ] || { echo 'sesh: jq is required' >&2; exit 1; }
 
-CANDIDATES=$(query "SELECT id, directory, title, time_updated AS updated FROM session_v2 WHERE time_updated < $CUTOFF AND COALESCE(time_archived, 0) = 0 AND parent_id IS NULL ORDER BY time_updated ASC;")
+CANDIDATES=$(query "SELECT id, directory, title, time_updated AS updated FROM session_v2 WHERE time_updated < $CUTOFF AND COALESCE(time_archived, 0) = 0 AND COALESCE(parent_id, '') = '' ORDER BY time_updated ASC;")
 # sqlite3 -json prints nothing (not []) when no rows match.
 [ -n "$CANDIDATES" ] || CANDIDATES='[]'
-PINS=$("$SCRIPT_DIR/sesh-pins.sh" read 2>/dev/null || printf '{"sessions":[],"directories":[]}')
-WAITING_IDS=$(bash "$SCRIPT_DIR/sesh-waiting.sh" --json 2>/dev/null | "$JQ_BIN" -r '.[].id' || true)
+PINS=$("$SCRIPT_DIR/sesh-pins.sh" read) || { echo 'sesh: refusing prune: pins protection unavailable' >&2; exit 1; }
+WAITING_IDS=$(bash "$SCRIPT_DIR/sesh-waiting.sh" --json | "$JQ_BIN" -er '
+  if type == "array" and all(.[]; (.id | type) == "string")
+  then map(.id) | join("\n") else error("invalid waiting sessions") end
+') || { echo 'sesh: refusing prune: waiting-session protection unavailable' >&2; exit 1; }
 [ -n "$WAITING_IDS" ] || WAITING_IDS='__none__'
 
 ELIGIBLE=$(printf '%s' "$CANDIDATES" | "$JQ_BIN" -c --slurpfile _pins <(printf '%s' "$PINS") --arg waiting "$WAITING_IDS" '
@@ -130,7 +133,7 @@ fi
 command -v "$OPENCODE_BIN" >/dev/null 2>&1 || { echo 'sesh: opencode executable is unavailable for deletes.' >&2; exit 1; }
 failed=0
 done_count=0
-for id in $(printf '%s' "$ELIGIBLE" | "$JQ_BIN" -r '.[].id'); do
+while IFS= read -r id; do
   [[ "$id" =~ ^ses_[A-Za-z0-9]+$ ]] || { echo "Refusing: unexpected session id shape." >&2; exit 1; }
   if "$OPENCODE_BIN" session delete "$id" >/dev/null 2>&1; then
     done_count=$((done_count + 1))
@@ -138,6 +141,6 @@ for id in $(printf '%s' "$ELIGIBLE" | "$JQ_BIN" -r '.[].id'); do
     echo "Could not delete $id." >&2
     failed=$((failed + 1))
   fi
-done
+done < <(printf '%s' "$ELIGIBLE" | "$JQ_BIN" -r '.[].id')
 echo "Deleted $done_count session(s) older than $older_than."
 [ "$failed" = 0 ] || exit 1

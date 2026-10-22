@@ -21,7 +21,6 @@
 # Keep NEEDS_INPUT_SQL in sync with the TUI sidebar copy in tui-plugins/sesh-panel/tui.tsx.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENCODE_BIN=${SESH_OPENCODE:-opencode}
 JSON=0
 while [ "$#" -gt 0 ]; do
@@ -80,7 +79,7 @@ SELECT s.id AS id, s.directory AS directory, s.title AS title, s.time_updated AS
   ) THEN 'question' ELSE 'stuck' END AS reason
 FROM session_v2 s
 WHERE COALESCE(s.time_archived, 0) = 0
-  AND s.parent_id IS NULL
+  AND COALESCE(s.parent_id, '') = ''
   AND (EXISTS (
     SELECT 1 FROM live
     WHERE live.session_id = s.id AND live.name = 'question'

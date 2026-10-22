@@ -73,7 +73,10 @@ case "$MODE" in
       complete=$(cat "$STATE_DIR/worker-complete" 2>/dev/null || printf 0)
       case "$complete" in ''|*[!0-9]*) complete=0;; esac
       if [ "$complete" -ge "$TARGET" ]; then
-        [ "$(cat "$STATE_DIR/status" 2>/dev/null || true)" = fresh ] || exit 1
+        case "$(cat "$STATE_DIR/status" 2>/dev/null || true)" in
+          fresh|'stale: transcript extraction incomplete; refresh to retry') ;;
+          *) exit 1 ;;
+        esac
         exit 0
       fi
       worker=$(cat "$STATE_DIR/worker.pid" 2>/dev/null || true)

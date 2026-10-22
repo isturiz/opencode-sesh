@@ -24,6 +24,10 @@ SCOPE_CWD=''
 usage() { echo "usage: ${0##*/} [--refresh] [--header] [--wait-lock SECONDS] --state-dir DIR [--cwd] [--limit N] [--archived] [--toggle-scope] [--query TEXT]" >&2; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --wait-lock|--state-dir|--limit|--query|--selected-id)
+      [ "$#" -ge 2 ] || { echo "$1 requires an argument" >&2; exit 2; } ;;
+  esac
+  case "$1" in
     --refresh) REFRESH=1 ;;
     --header) HEADER=1 ;;
     --wait-lock) WAIT_LOCK=${2:-}; shift ;;
@@ -57,6 +61,12 @@ EXTRACTIONS="$CACHE_DIR/extractions"
 # so metadata always covers the whole database and cache pruning is safe.
 SCOPE_CWD_SETTING=''
 if [ -f "$SETTINGS" ]; then
+  "$JQ_BIN" -e '
+    type == "object" and (.scope | type) == "string"
+    and (.limit | type) == "number" and .limit >= 0 and .limit == (.limit | floor)
+    and ((.archived // 0) == 0 or .archived == 1)
+    and ((.cwd // "") | type) == "string"
+  ' "$SETTINGS" >/dev/null 2>&1 || { echo 'sesh: invalid settings' >&2; exit 2; }
   [ "$LIMIT_SET" = 1 ] || LIMIT=$("$JQ_BIN" -r '.limit' "$SETTINGS")
   [ "$SCOPE_SET" = 1 ] || SCOPE_CWD=$("$JQ_BIN" -r '.scope' "$SETTINGS")
   [ "$ARCHIVED_SET" = 1 ] || INCLUDE_ARCHIVED=$("$JQ_BIN" -r '.archived // 0' "$SETTINGS" 2>/dev/null || printf '0')
@@ -198,19 +208,16 @@ render() {
 release_lock() { rm -f "$LOCK/pid" 2>/dev/null || true; rmdir "$LOCK" 2>/dev/null || true; }
 acquire_lock() {
   if mkdir "$LOCK" 2>/dev/null; then printf '%s\n' "$$" > "$LOCK/pid"; return 0; fi
-  local owner=''; [ -f "$LOCK/pid" ] && owner=$(cat "$LOCK/pid" 2>/dev/null || true)
-  case "$owner" in ''|*[!0-9]*) return 1;; esac
-  kill -0 "$owner" 2>/dev/null && return 1
-  rm -f "$LOCK/pid" 2>/dev/null || return 1
-  rmdir "$LOCK" 2>/dev/null || return 1
-  mkdir "$LOCK" 2>/dev/null || return 1
-  printf '%s\n' "$$" > "$LOCK/pid"
+  # Only the owner removes a lock; stale reclamation can race a new owner.
+  return 1
 }
+
+lock_error() { printf 'sesh: refresh lock is busy: %s; if it persists, stop all sesh pickers before removing this lock directory\n' "$LOCK" >&2; }
 
 acquire_lock_wait() {
   local remaining=$WAIT_LOCK
   while ! acquire_lock; do
-    [ "$remaining" -gt 0 ] || return 75
+    [ "$remaining" -gt 0 ] || { lock_error; return 75; }
     sleep 1
     remaining=$((remaining - 1))
   done
@@ -231,35 +238,39 @@ refresh() {
   private_dir "$EXTRACTIONS"
   # Migrate warm caches too, including temporary files left by older versions.
   # Do not follow symlinks or chmod unrelated files outside our extraction store.
-  find "$EXTRACTIONS" -maxdepth 1 -type f -user "$(id -u)" \( -name 'ses_*.json' -o -name 'ses_*.json.tmp' \) -exec chmod 600 {} +
+  # SIGKILL orphans stay: the cache is shared, but refresh locks are picker-local,
+  # so removing unowned temp files could interrupt another picker's writer.
+  find "$EXTRACTIONS" -maxdepth 1 -type f -user "$(id -u)" \( -name 'ses_*.json' -o -name 'ses_*.json.tmp' -o -name 'ses_*.json.??????' \) -exec chmod 600 {} +
   if [ "${SESH_LOCK_HELD:-}" != "$STATE_DIR" ]; then
-    if [ "$WAIT_LOCK" -gt 0 ]; then acquire_lock_wait || return $?; else acquire_lock || return 0; fi
+    if [ "$WAIT_LOCK" -gt 0 ]; then acquire_lock_wait || return $?; else acquire_lock || { lock_error; return 75; }; fi
   fi
+  refresh_scratch=''
+  refresh_cache_tmp=''
+  if [ "${SESH_LOCK_HELD:-}" = "$STATE_DIR" ]; then
+    trap '[ -z "$refresh_cache_tmp" ] || rm -f "$refresh_cache_tmp"; [ -z "$refresh_scratch" ] || rm -rf "$refresh_scratch"' EXIT
+  else
+    trap '[ -z "$refresh_cache_tmp" ] || rm -f "$refresh_cache_tmp"; [ -z "$refresh_scratch" ] || rm -rf "$refresh_scratch"; release_lock' EXIT
+  fi
+  trap 'exit 130' HUP INT TERM
   # Persist the effective scope (after any toggle) so renders and workers agree.
   if [ "$SCOPE_SET" = 1 ] || [ ! -f "$SETTINGS" ]; then
     atomic_text "$SETTINGS" "$("$JQ_BIN" -cn --arg scope "$SCOPE_CWD" --argjson limit "$LIMIT" --arg cwd "$SCOPE_CWD_SETTING" --argjson archived "$INCLUDE_ARCHIVED" '{scope:$scope,limit:$limit,cwd:$cwd,archived:$archived}')"
   fi
   DB_PATH=$(resolve_db) || {
     if [ -f "$SNAPSHOT" ]; then set_status 'stale: opencode database is unavailable; showing last good snapshot'; else set_status 'unavailable: opencode database is unavailable'; fi
-    return 0
+    return 1
   }
   [ -f "$DB_PATH" ] || {
     if [ -f "$SNAPSHOT" ]; then set_status 'stale: opencode database is unavailable; showing last good snapshot'; else set_status 'unavailable: opencode database is unavailable'; fi
-    return 0
+    return 1
   }
   if [ -z "$SQLITE_BIN" ]; then
     if [ -f "$SNAPSHOT" ]; then set_status 'stale: sqlite3 is not available; showing last good snapshot'; else set_status 'unavailable: sqlite3 is not available'; fi
-    return 0
+    return 1
   fi
   local scratch sessions parts cache_records cache_state historical needs_extract out
   scratch=$(mktemp -d "$STATE_DIR/.refresh.XXXXXX")
   refresh_scratch=$scratch
-  if [ "${SESH_LOCK_HELD:-}" = "$STATE_DIR" ]; then
-    trap 'rm -rf "$refresh_scratch"' EXIT
-  else
-    trap 'rm -rf "$refresh_scratch"; release_lock' EXIT
-  fi
-  trap 'exit 130' HUP INT TERM
   sessions="$scratch/sessions.json"; parts="$scratch/parts.json"
   cache_records="$scratch/caches.json"; cache_state="$scratch/cache-state.json"
   historical="$scratch/historical.jsonl"; needs_extract="$scratch/needs-extract.json"
@@ -267,14 +278,14 @@ refresh() {
 
   db_json "SELECT id, directory, title, time_created, time_updated, COALESCE(time_archived, 0) AS archived, COALESCE(parent_id, '') AS parent FROM session_v2 ORDER BY time_updated DESC;" > "$sessions" 2>/dev/null || {
     if [ -f "$SNAPSHOT" ]; then set_status 'stale: opencode database query failed; showing last good snapshot'; else set_status 'unavailable: opencode database query failed'; fi
-    return 0
+    return 1
   }
   # sqlite3 emits no bytes for zero rows. Publish an empty snapshot so removal
   # of the final session also produces the non-actionable selection notice.
   [ -s "$sessions" ] || printf '[]\n' > "$sessions"
   "$JQ_BIN" -e 'type == "array"' "$sessions" >/dev/null 2>&1 || {
     if [ -f "$SNAPSHOT" ]; then set_status 'stale: opencode database query failed; showing last good snapshot'; else set_status 'unavailable: opencode database query failed'; fi
-    return 0
+    return 1
   }
   db_json "SELECT session_id, COUNT(*) AS n, MAX(time_updated) AS m FROM session_message GROUP BY session_id;" > "$parts" 2>/dev/null || printf '[]\n' > "$parts"
   "$JQ_BIN" -e 'type == "array"' "$parts" >/dev/null 2>&1 || printf '[]\n' > "$parts"
@@ -296,7 +307,7 @@ refresh() {
     | ($cached | map({key: .sessionId, value:true}) | from_entries) as $cachedIds
     | {cached: $cached,
        stale: [$meta[] | select($cachedIds[.id] != true) | {id, directory, title, time_created, time_updated, archived, partCount, partMax}],
-       prune: [$caches[0][]? | select(.sessionId? as $s | $byId[$s] == null) | .cachePath],
+       prune: [$caches[0][]? | select(if (.sessionId | type) != "string" then true else $byId[.sessionId] == null end) | .cachePath],
        meta: $meta}
   ' "$cache_records" > "$cache_state" || {
     set_status 'stale: snapshot construction failed; showing last good snapshot'
@@ -366,9 +377,10 @@ refresh() {
   if [ "$extract_failed" = 0 ]; then
     while IFS= read -r sid && IFS= read -r cache_path && IFS= read -r record; do
       [ -n "$sid" ] || continue
-      cache_tmp=$(mktemp "$EXTRACTIONS/$sid.json.XXXXXX")
-      printf '%s\n' "$record" > "$cache_tmp"
-      mv "$cache_tmp" "$cache_path"
+      refresh_cache_tmp=$(mktemp "$EXTRACTIONS/$sid.json.XXXXXX")
+      printf '%s\n' "$record" > "$refresh_cache_tmp"
+      mv "$refresh_cache_tmp" "$cache_path"
+      refresh_cache_tmp=''
       printf '%s\n' "$record" >> "$historical"
     done < "$records"
   fi

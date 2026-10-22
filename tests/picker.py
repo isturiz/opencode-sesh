@@ -238,6 +238,55 @@ exec {shlex.quote(FZF)} "$@"
         self.until(lambda: len(self.contents("invocations").splitlines()) == 2)
         self.assertIn("--query=auth  ", self.contents("invocations").splitlines()[1])
 
+    def test_scope_toggle_waits_for_busy_refresh_lock(self):
+        self.start()
+        settings = next((self.root / "tmp").glob("sesh.*/settings.json"))
+        lock = settings.parent / "refresh.lock"
+
+        def acquire():
+            try:
+                lock.mkdir()
+            except FileExistsError:
+                return False
+            (lock / "pid").write_text(str(os.getpid()) + "\n")
+            return True
+
+        self.until(acquire)
+        try:
+            self.key(b"\x07")
+            self.settle(0.5)
+            self.assertEqual(json.loads(settings.read_text())["scope"], "")
+        finally:
+            (lock / "pid").unlink()
+            lock.rmdir()
+        self.until(
+            lambda: (
+                json.loads(settings.read_text())["scope"]
+                == os.path.realpath(self.root / "project")
+            )
+        )
+
+    def test_partial_transcript_index_does_not_block_resume(self):
+        wrapper = self.root / "bin/sqlite-partial"
+        wrapper.write_text(f"""#!/bin/bash
+case "$*" in *json_object*) exit 1;; esac
+exec {shlex.quote(self.env["SESH_SQLITE"])} "$@"
+""")
+        wrapper.chmod(0o700)
+        self.env["SESH_SQLITE"] = str(wrapper)
+        self.start(selection_steps=b"\x0e\x0e\x0e")
+        self.key(b"\r")
+        self.until(lambda: len(self.contents("invocations").splitlines()) == 2)
+        self.assertEqual(
+            self.actions(),
+            [
+                dict(
+                    args=["--session", "ses_beta"],
+                    cwd=os.path.realpath(self.root / "project"),
+                )
+            ],
+        )
+
     def test_delete_tracks_identity(self):
         self.start()
         self.reorder()

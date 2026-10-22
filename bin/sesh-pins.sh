@@ -12,8 +12,16 @@ value=${2:-}
 read_pins() {
   if [ -f "$PINS_FILE" ]; then
     local pins=''
-    pins=$("$JQ_BIN" -c 'select(type == "object") | {sessions: ((.sessions // []) | map(select(type == "string"))), directories: ((.directories // []) | map(select(type == "string")))}' "$PINS_FILE" 2>/dev/null) || pins=''
-    printf '%s\n' "${pins:-$empty}"
+    pins=$("$JQ_BIN" -ces '
+      if length != 1 then error("invalid pins") else .[0] end
+      | select(type == "object")
+      | {sessions: .sessions, directories: .directories}
+      | select(all(.[]; type == "array" and all(.[]; type == "string")))
+    ' "$PINS_FILE" 2>/dev/null) || { echo 'sesh: cannot read pins; leaving them unchanged' >&2; return 1; }
+    printf '%s\n' "$pins"
+  elif [ -e "$PINS_FILE" ] || [ -L "$PINS_FILE" ]; then
+    echo 'sesh: cannot read pins; leaving them unchanged' >&2
+    return 1
   else
     printf '%s\n' "$empty"
   fi
@@ -34,13 +42,8 @@ mkdir -p "$(dirname "$PINS_FILE")"
 lock="$PINS_FILE.lock"
 for ((attempt = 0; attempt < 50; attempt++)); do
   if mkdir "$lock" 2>/dev/null; then printf '%s\n' "$$" > "$lock/pid"; break; fi
-  owner=''
-  [ ! -f "$lock/pid" ] || owner=$(cat "$lock/pid" 2>/dev/null || true)
-  if [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null; then
-    rm -f "$lock/pid" 2>/dev/null || true
-    rmdir "$lock" 2>/dev/null || true
-  fi
-  [ "$attempt" -lt 49 ] || { echo 'sesh: pins are busy; try again' >&2; exit 1; }
+  # Only the owner removes a lock; stale reclamation can race a new owner.
+  [ "$attempt" -lt 49 ] || { printf 'sesh: pins lock is busy: %s; if it persists, stop all sesh pickers and OpenCode instances before removing this lock directory\n' "$lock" >&2; exit 1; }
   sleep 0.1
 done
 tmp=''

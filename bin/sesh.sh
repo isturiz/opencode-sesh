@@ -75,12 +75,12 @@ picker_query=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --cwd) scope_value=$PWD ;;
-    --limit) picker_limit=${2:-}; shift ;;
+    --limit) [ "$#" -ge 2 ] || { echo '--limit requires an argument' >&2; exit 2; }; picker_limit=$2; shift ;;
     --archived) picker_archived=1 ;;
     --print) picker_print=1 ;;
     --fork) picker_fork=1 ;;
     --json) picker_json=1 ;;
-    --query) picker_query=${2:-}; shift ;;
+    --query) [ "$#" -ge 2 ] || { echo '--query requires an argument' >&2; exit 2; }; picker_query=$2; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -129,7 +129,7 @@ cache_cmd="$q_worker render --state-dir $q_state --query {q} --selected-id {6}"
 header_cmd="$q_list --header --state-dir $q_state"
 preview_cmd="if [ -f $q_state/help ]; then $q_shortcuts; else $q_preview $q_state {2}; fi"
 help_bind="?:transform:[ -z {q} ] && ( [ -f $q_state/help ] && rm -f $q_state/help && echo hide-preview || ( : > $q_state/help && echo show-preview+refresh-preview ) ) || echo 'put(?)'"
-toggle_cmd="$q_list --toggle-scope --state-dir $q_state >/dev/null"
+toggle_cmd="$q_list --toggle-scope --wait-lock 12 --state-dir $q_state >/dev/null"
 delete_cmd="$q_delete $q_state {2}"
 pin_session_cmd="$q_pins toggle-session {2}"
 pin_directory_cmd="$q_pins toggle-directory {5}"

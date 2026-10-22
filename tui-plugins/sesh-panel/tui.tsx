@@ -6,7 +6,7 @@ import type { Accessor } from "solid-js"
 type TuiPluginApi = ReturnType<typeof createApi>
 type TuiPlugin = (api: TuiPluginApi) => Promise<void>
 import { createEffect, createMemo, createRoot, createSignal, For, getOwner, on, onCleanup, onMount, runWithOwner, Show } from "solid-js"
-import { mkdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises"
+import { lstat, mkdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { spawn, spawnSync } from "node:child_process"
@@ -103,14 +103,26 @@ const emptyPins = (): Pins => ({ sessions: [], directories: [] })
 const pinsPath = () =>
   process.env.SESH_PINS_FILE ?? join(process.env.XDG_DATA_HOME ?? join(process.env.HOME ?? "", ".local/share"), "sesh/pins.json")
 
-async function readPins(): Promise<Pins> {
+async function readPins(strict = false): Promise<Pins> {
   try {
     const data = JSON.parse(await readFile(pinsPath(), "utf8")) as Partial<Pins>
-    return {
-      sessions: Array.isArray(data.sessions) ? data.sessions.filter((id): id is string => typeof id === "string") : [],
-      directories: Array.isArray(data.directories) ? data.directories.filter((dir): dir is string => typeof dir === "string") : [],
+    if (!data || !Array.isArray(data.sessions) || !Array.isArray(data.directories) ||
+      !data.sessions.every((id) => typeof id === "string") || !data.directories.every((dir) => typeof dir === "string")) {
+      throw new Error("invalid pins file")
     }
-  } catch {
+    return { sessions: data.sessions, directories: data.directories }
+  } catch (error) {
+    if (strict) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+      let absent = false
+      try {
+        await lstat(pinsPath())
+      } catch (statError) {
+        if ((statError as NodeJS.ErrnoException).code !== "ENOENT") throw statError
+        absent = true
+      }
+      if (!absent) throw error
+    }
     return emptyPins()
   }
 }
@@ -127,27 +139,15 @@ async function togglePin(kind: keyof Pins, value: string): Promise<Pins> {
       break
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
-      try {
-        const owner = Number((await readFile(join(lock, "pid"), "utf8")).trim())
-        if (Number.isSafeInteger(owner) && owner > 0) {
-          try {
-            process.kill(owner, 0)
-          } catch (check) {
-            if ((check as NodeJS.ErrnoException).code === "ESRCH") {
-              await unlink(join(lock, "pid")).catch(() => {})
-              await rmdir(lock).catch(() => {})
-            }
-          }
-        }
-      } catch {}
+      // Only the owner removes a lock; stale reclamation can race a new owner.
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
   }
-  if (!locked) throw new Error("pins are busy")
+  if (!locked) throw new Error(`pins lock is busy: ${lock}; if it persists, stop all sesh pickers and OpenCode instances before removing this lock directory`)
   const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}`
   try {
     await writeFile(join(lock, "pid"), `${process.pid}\n`)
-    const next = await readPins()
+    const next = await readPins(true)
     next[kind] = next[kind].includes(value) ? next[kind].filter((item) => item !== value) : [...next[kind], value]
     await writeFile(tmp, JSON.stringify(next) + "\n", { mode: 0o600 })
     await rename(tmp, file)
@@ -155,7 +155,7 @@ async function togglePin(kind: keyof Pins, value: string): Promise<Pins> {
   } finally {
     await unlink(tmp).catch(() => {})
     await unlink(join(lock, "pid")).catch(() => {})
-    await rmdir(lock)
+    await rmdir(lock).catch(() => {})
   }
 }
 
@@ -277,6 +277,10 @@ const LEFT_BUTTON = 0
 const RIGHT_BUTTON = 2
 
 function openInCmuxWorkspace(api: TuiPluginApi, entry: Entry) {
+  if (!SESSION_ID_PATTERN.test(entry.id)) {
+    api.ui.toast({ message: "Invalid session ID", variant: "error" })
+    return
+  }
   if (!process.env.CMUX_WORKSPACE_ID) {
     api.ui.toast({ message: "Right-click opens a new workspace only inside cmux", variant: "info" })
     return
@@ -445,8 +449,9 @@ function sidebarMarker(current: boolean, live?: string): SidebarMarker {
 const SESSION_PAGE_LIMIT = 200
 const SESSION_MAX = 5000
 
-async function fetchEntries(api: TuiPluginApi): Promise<EntryResult> {
+async function fetchEntries(api: TuiPluginApi, active = () => true): Promise<EntryResult> {
   const home = process.env.HOME ?? ""
+  if (!active()) return { entries: [], truncated: false }
   const projectResult = await api.client.project.list()
   const projects = ((projectResult?.data ?? projectResult) as Project[]) ?? []
   const projectName = new Map<string, string>(
@@ -456,6 +461,7 @@ async function fetchEntries(api: TuiPluginApi): Promise<EntryResult> {
   let cursor: string | undefined
   let truncated = false
   for (;;) {
+    if (!active()) break
     const result = await api.client.experimental.session.list({
       limit: SESSION_PAGE_LIMIT,
       roots: true,
@@ -503,16 +509,19 @@ type IndexProgress = { indexed: number; total: number; complete: boolean }
 
 const nextTick = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
 
+let resolvedDbPath: string | undefined
+
 function resolveDbPath(): string {
   if (process.env.SESH_DB) return process.env.SESH_DB
+  if (resolvedDbPath) return resolvedDbPath
   const home = process.env.HOME ?? ""
   const dataHome = process.env.XDG_DATA_HOME ?? `${home}/.local/share`
   const xdgPath = `${dataHome}/opencode/opencode.db`
-  if (existsSync(xdgPath)) return xdgPath
+  if (existsSync(xdgPath)) return resolvedDbPath = xdgPath
   try {
     const result = spawnSync(process.env.SESH_OPENCODE ?? "opencode", ["debug", "paths"], { encoding: "utf8" })
     const match = result.stdout?.match(/^db\s+(.+)$/m)
-    if (match) return match[1].trimEnd()
+    if (result.status === 0 && match && existsSync(match[1].trimEnd())) return resolvedDbPath = match[1].trimEnd()
   } catch {}
   return xdgPath
 }
@@ -525,6 +534,62 @@ async function openTranscriptDb(): Promise<any | undefined> {
     return new sqlite.Database(resolveDbPath(), { readonly: true })
   } catch {
     return undefined
+  }
+}
+
+type SessionSnapshot = { entries: Entry[]; waiting: Map<string, string>; failed: boolean }
+
+function createSessionPoll(api: TuiPluginApi, refreshPins: () => void) {
+  const listeners = new Set<(snapshot: SessionSnapshot) => void>()
+  let snapshot: SessionSnapshot = { entries: [], waiting: new Map(), failed: false }
+  let clock: ReturnType<typeof setInterval> | undefined
+  let inFlight: Promise<void> | undefined
+  const active = () => listeners.size > 0
+  const load = () => {
+    if (inFlight || !active()) return
+    inFlight = (async () => {
+      refreshPins()
+      try {
+        const result = await fetchEntries(api, active)
+        if (!active()) return
+        const previous = new Map(snapshot.entries.map((entry) => [entry.id, entry]))
+        const entries = result.entries.map((entry) => {
+          const old = previous.get(entry.id)
+          return old && old.title === entry.title && old.dir === entry.dir && old.group === entry.group && old.updated === entry.updated ? old : entry
+        })
+        const unchanged = entries.length === snapshot.entries.length && entries.every((entry, i) => entry === snapshot.entries[i])
+        snapshot = { ...snapshot, entries: unchanged ? snapshot.entries : entries, failed: false }
+      } catch {
+        snapshot = { ...snapshot, failed: true }
+      }
+      if (!active()) return
+      const db = await openTranscriptDb()
+      if (db) {
+        try {
+          if (active()) snapshot = { ...snapshot, waiting: await queryWaitingIds(db) }
+        } catch {
+          // Keep the previous waiting set when the local store is unavailable.
+        } finally {
+          db.close()
+        }
+      }
+      for (const listener of listeners) listener(snapshot)
+    })().finally(() => { inFlight = undefined })
+  }
+  return (listener: (snapshot: SessionSnapshot) => void) => {
+    listeners.add(listener)
+    listener(snapshot)
+    if (!clock) {
+      load()
+      clock = setInterval(load, POLL_MS)
+    }
+    return () => {
+      listeners.delete(listener)
+      if (!active() && clock) {
+        clearInterval(clock)
+        clock = undefined
+      }
+    }
   }
 }
 
@@ -654,7 +719,7 @@ function addTranscript(index: Map<string, string>, sid: string, data: string): v
     }
     for (const text of texts) {
       const base = index.get(sid) ?? ""
-      index.set(sid, `${base} ${text.toLowerCase()}`.trim())
+      index.set(sid, `${base} ${text}`.trim())
     }
   } catch {
     // ignore malformed messages
@@ -668,22 +733,25 @@ async function buildSearchIndex(
   api: TuiPluginApi,
   entries: Entry[],
   onProgress?: (progress: IndexProgress, index: Map<string, string>) => void,
+  active = () => true,
 ): Promise<Map<string, string>> {
   const index = new Map<string, string>()
   for (const entry of entries) {
-    index.set(entry.id, `${entry.title.toLowerCase()} ${entry.dir.toLowerCase()}`)
+    index.set(entry.id, `${entry.title} ${entry.dir}`)
   }
   const ids = entries.map((entry) => entry.id).filter((id) => SESSION_ID_PATTERN.test(id))
   const remaining = new Set(ids)
   const total = ids.length
   let indexed = 0
-  const report = (complete: boolean) => onProgress?.({ indexed, total, complete }, index)
+  const report = (complete: boolean) => { if (active()) onProgress?.({ indexed, total, complete }, index) }
   report(false)
 
+  if (!active()) return index
   const db = await openTranscriptDb()
   if (db) {
     try {
       for (let i = 0; i < ids.length; i += TRANSCRIPT_BATCH) {
+        if (!active()) break
         const batch = ids.slice(i, i + TRANSCRIPT_BATCH)
         const placeholders = batch.map(() => "?").join(",")
         const rows = (db
@@ -704,11 +772,11 @@ async function buildSearchIndex(
     }
   }
 
-  if (remaining.size > 0) {
+  if (active() && remaining.size > 0) {
     await buildSearchIndexRemote(api, [...remaining], index, () => {
       indexed += 1
       if (indexed % TRANSCRIPT_BATCH === 0) report(false)
-    })
+    }, active)
   }
   report(true)
   return index
@@ -719,6 +787,7 @@ async function buildSearchIndexRemote(
   ids: string[],
   index: Map<string, string>,
   onEach: () => void,
+  active = () => true,
 ): Promise<void> {
   const home = process.env.HOME ?? ""
   const cacheDir = process.env.SESH_CACHE_DIR ?? `${process.env.XDG_CACHE_HOME ?? `${home}/.cache`}/sesh`
@@ -726,12 +795,14 @@ async function buildSearchIndexRemote(
   // Bounded concurrency: a fixed worker pool instead of one request per session.
   const worker = async () => {
     for (;;) {
+      if (!active()) return
       const i = cursor++
       if (i >= ids.length) return
       const id = ids[i]
       const base = index.get(id) ?? ""
       try {
         const raw = await readFile(`${cacheDir}/extractions/${id}.json`, "utf8")
+        if (!active()) return
         const record = JSON.parse(raw) as { fulltextLower?: unknown; title?: unknown }
         const fulltext = typeof record?.fulltextLower === "string" ? record.fulltextLower : ""
         // Extraction caches prefix the transcript with the cached title. The
@@ -741,8 +812,10 @@ async function buildSearchIndexRemote(
         const transcript = title && fulltext.startsWith(title) ? fulltext.slice(title.length) : fulltext
         index.set(id, `${base} ${transcript}`.trim())
       } catch {
+        if (!active()) return
         try {
-          const result = await api.client.session.messages({ sessionID: id })
+          const result = await api.client.session.messages({ sessionID: id, active })
+          if (!active()) return
           const messages = result.data ?? []
           const text = messages
             .flatMap((message: any) =>
@@ -751,7 +824,6 @@ async function buildSearchIndexRemote(
                 .map((part: any) => (part as { text: string }).text),
             )
             .join(" ")
-            .toLowerCase()
           index.set(id, `${base} ${text}`.trim())
         } catch {}
       }
@@ -761,13 +833,13 @@ async function buildSearchIndexRemote(
   await Promise.all(Array.from({ length: Math.min(REMOTE_CONCURRENCY, ids.length) }, worker))
 }
 
-// The index is title + directory + text parts, all lowercased. Start looking
+// The index is title + directory + text parts. Start looking
 // after the metadata so a title match never masquerades as a transcript hit.
 function transcriptMatchExcerpt(indexed: string | undefined, entry: Entry, query: string): string | undefined {
   const needle = query.trim().toLowerCase()
   if (!indexed || !needle) return undefined
-  const transcriptStart = `${entry.title.toLowerCase()} ${entry.dir.toLowerCase()}`.length + 1
-  const at = indexed.indexOf(needle, transcriptStart)
+  const transcriptStart = `${entry.title} ${entry.dir}`.length + 1
+  const at = indexed.toLowerCase().indexOf(needle, transcriptStart)
   if (at < 0) return undefined
   const start = Math.max(transcriptStart, at - 28)
   const end = Math.min(indexed.length, Math.max(at + needle.length + 28, start + 90))
@@ -787,7 +859,7 @@ function filterPickerEntries(
     if (filters.waitingOnly && !waitingIds.has(entry.id)) return false
     if (filters.pinnedOnly && !pinned.has(entry.id)) return false
     if (!q) return true
-    return (index.get(entry.id) ?? `${entry.title} ${entry.dir}`.toLowerCase()).includes(q)
+    return (index.get(entry.id) ?? `${entry.title} ${entry.dir}`).toLowerCase().includes(q)
   })
 }
 
@@ -994,7 +1066,7 @@ function pickerLastStart(rows: PickerRow[], height: number, excerpt: (entry: Ent
   return start
 }
 
-type PinProps = { pins: () => Pins; onTogglePin: (kind: keyof Pins, value: string) => void; refreshPins: () => void }
+type PinProps = { pins: () => Pins; onTogglePin: (kind: keyof Pins, value: string) => void; poll: ReturnType<typeof createSessionPoll> }
 
 function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   const theme = () => props.api.theme.current
@@ -1022,42 +1094,11 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     return params && typeof params.sessionID === "string" ? params.sessionID : undefined
   })
 
-  onMount(() => {
-    let alive = true
-    const load = async () => {
-      props.refreshPins()
-      try {
-        const { entries: all } = await fetchEntries(props.api)
-        if (alive) {
-          setEntries(all)
-          setLoadFailed(false)
-        }
-      } catch {
-        // leave the previous list in place rather than flashing to blank, but
-        // say so when there is nothing at all to show
-        if (alive && entries().length === 0) setLoadFailed(true)
-      }
-      try {
-        const db = await openTranscriptDb()
-        if (db) {
-          try {
-            const ids = await queryWaitingIds(db)
-            if (alive) setWaiting(ids)
-          } finally {
-            db.close()
-          }
-        }
-      } catch {
-        // leave the previous waiting set in place rather than flashing
-      }
-    }
-    void load()
-    const clock = setInterval(() => void load(), POLL_MS)
-    onCleanup(() => {
-      alive = false
-      clearInterval(clock)
-    })
-  })
+  onMount(() => onCleanup(props.poll((snapshot) => {
+    setEntries(snapshot.entries)
+    setLoadFailed(snapshot.failed)
+    setWaiting(snapshot.waiting)
+  })))
 
   const filteredEntries = createMemo(() => {
     const q = query().trim().toLowerCase()
@@ -1069,7 +1110,6 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   })
 
   const shownEntries = createMemo(() => filteredEntries())
-  const remaining = createMemo(() => Math.max(0, filteredEntries().length - shownEntries().length))
 
   const NEEDS_INPUT_DIR = "__needs_input__"
   const waitingEntries = createMemo(() => {
@@ -1336,7 +1376,6 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   let disposeSearch: (() => void) | undefined
   let disposeNav: (() => void) | undefined
   let disposeConfirm: (() => void) | undefined
-  let insideSearchBox = false
 
   createEffect(() => {
     disposeConfirm?.()
@@ -1379,10 +1418,6 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   const onRootMouseDown = () => {
     menu.close()
     preview.closeIfOpen()
-    if (insideSearchBox) {
-      insideSearchBox = false
-      return
-    }
     if (searching()) setSearching(false)
     // A click anywhere outside the sidebar means input is back in the main
     // view: release the nav layer, hover shortcuts and any armed delete so
@@ -1421,12 +1456,12 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
 
   const openSidebarPreview = (entry: Entry) => preview.open(entry)
 
+  const hoveredEntry = createMemo(() => entries().find((entry) => entry.id === hovered()))
   createEffect(() => {
     disposeHoverSpace?.()
     disposeHoverSpace = undefined
-    const id = hovered()
-    if (!id) return
-    const entry = entries().find((e) => e.id === id)
+    if (navActive()) return
+    const entry = hoveredEntry()
     if (!entry) return
     disposeHoverSpace = props.api.keymap.registerLayer({
       mode: "base",
@@ -1534,19 +1569,6 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
           setNavActive(false)
         },
       },
-      ...(pendingDelete()
-        ? [
-            {
-              key: "y",
-              desc: "Confirm delete",
-              preventDefault: true,
-              cmd: () => {
-                confirmArmed()
-              },
-            },
-            { key: "n", desc: "Cancel delete", preventDefault: true, cmd: cancelDelete },
-          ]
-        : []),
     ]
     disposeNav = props.api.keymap.registerLayer({ mode: "base", priority: 20, bindings })
   })
@@ -1606,7 +1628,6 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
             // Sidebar-internal: the root handler must not see this click, or
             // it would clear the search this box just activated.
             event.stopPropagation()
-            insideSearchBox = true
             setSearching(true)
           }}
         >
@@ -1720,9 +1741,6 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
           }}
         </For>
         </scrollbox>
-        <Show when={remaining() > 0}>
-          <text style={{ fg: theme().textMuted }}>{`… ${remaining()} more · option+o for all`}</text>
-        </Show>
         <Show when={query().trim() && filteredEntries().length === 0}>
             <text style={{ fg: theme().textMuted }}>No title or directory matches · option+o to search transcripts</text>
         </Show>
@@ -1817,7 +1835,6 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   const preview = createTranscriptPreview(props.api)
   let disposeHoverSpace: (() => void) | undefined
   let disposeSearch: (() => void) | undefined
-  let insideSearchBox = false
 
   const cancelDelete = () => {
     if (confirmTimer) clearTimeout(confirmTimer)
@@ -1895,11 +1912,9 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
 
   const onRootMouseDown = () => {
     preview.closeIfOpen()
-    if (insideSearchBox) {
-      insideSearchBox = false
-      return
-    }
     if (searching()) setSearching(false)
+    cancelDelete()
+    setHovered(undefined)
   }
 
   // A modal dialog owns input while open: yield this list's keyboard captures
@@ -1934,12 +1949,11 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
     })
   })
 
+  const hoveredEntry = createMemo(() => entries().find((entry) => entry.id === hovered()))
   createEffect(() => {
     disposeHoverSpace?.()
     disposeHoverSpace = undefined
-    const id = hovered()
-    if (!id) return
-    const entry = entries().find((e) => e.id === id)
+    const entry = hoveredEntry()
     if (!entry) return
     disposeHoverSpace = props.api.keymap.registerLayer({
       mode: "base",
@@ -1972,27 +1986,10 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
     if (confirmTimer) clearTimeout(confirmTimer)
   })
 
-  onMount(() => {
-    let alive = true
-    const load = async () => {
-      props.refreshPins()
-      try {
-        const { entries: all } = await fetchEntries(props.api)
-        if (alive) {
-          setEntries(all)
-          setLoadFailed(false)
-        }
-      } catch {
-        if (alive && entries().length === 0) setLoadFailed(true)
-      }
-    }
-    void load()
-    const clock = setInterval(() => void load(), POLL_MS)
-    onCleanup(() => {
-      alive = false
-      clearInterval(clock)
-    })
-  })
+  onMount(() => onCleanup(props.poll((snapshot) => {
+    setEntries(snapshot.entries)
+    setLoadFailed(snapshot.failed)
+  })))
 
   const visible = createMemo(() => {
     const q = query().trim().toLowerCase()
@@ -2029,8 +2026,8 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
               paddingLeft={1}
               paddingRight={1}
               backgroundColor={searching() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
-              onMouseDown={() => {
-                insideSearchBox = true
+              onMouseDown={(event: { stopPropagation: () => void }) => {
+                event.stopPropagation()
                 setSearching(true)
               }}
             >
@@ -2108,6 +2105,7 @@ const tui: TuiPlugin = async (api) => {
     })
   }
   refreshPins()
+  const poll = createSessionPoll(api, refreshPins)
   const onTogglePin = (kind: keyof Pins, value: string) => {
     if (!value) return
     pinVersion += 1
@@ -2123,10 +2121,10 @@ const tui: TuiPlugin = async (api) => {
     order: 100,
     slots: {
       sidebar_content() {
-        return <SidebarSessions api={api} pins={pins} onTogglePin={onTogglePin} refreshPins={refreshPins} />
+        return <SidebarSessions api={api} pins={pins} onTogglePin={onTogglePin} poll={poll} />
       },
       home_bottom() {
-        return <HomeSessions api={api} pins={pins} onTogglePin={onTogglePin} refreshPins={refreshPins} />
+        return <HomeSessions api={api} pins={pins} onTogglePin={onTogglePin} poll={poll} />
       },
     },
   })
@@ -2195,7 +2193,7 @@ const tui: TuiPlugin = async (api) => {
       // Publish a fresh snapshot: the indexing workers mutate their own map,
       // while Solid needs a new reference to update search results mid-scan.
       setSearchIndex(new Map(index))
-    })
+    }, () => alive)
     const orderedEntries = createMemo(() => pinnedFirst(allEntries(), pins()))
     const currentProject = () => {
       const route = api.route.current
@@ -2368,9 +2366,12 @@ const tui: TuiPlugin = async (api) => {
 
     // Match OpenTUI's scrollbox: honor every wheel event's delta. The viewport
     // stays independent of selection, so fast scrolling cannot recenter on hover.
+    let scrollRemainder = 0
     const scrollPicker = (scroll?: { direction: string; delta: number }) => {
       if (showPreview() || !scroll || (scroll.direction !== "up" && scroll.direction !== "down")) return
-      const amount = Math.trunc(scroll.delta) * (scroll.direction === "down" ? 1 : -1)
+      scrollRemainder += scroll.delta * (scroll.direction === "down" ? 1 : -1)
+      const amount = Math.trunc(scrollRemainder)
+      scrollRemainder -= amount
       setViewportStart((start) => Math.max(0, Math.min(maxViewportStart(), start + amount)))
     }
 
@@ -3164,9 +3165,10 @@ const tui: TuiPlugin = async (api) => {
     },
   ])
 
-  api.keymap.registerLayer({
+  const disposePickerKey = api.keymap.registerLayer({
     bindings: [{ key: "alt+o", desc: "Pick session", preventDefault: true, cmd: () => void openPicker() }],
   })
+  onCleanup(disposePickerKey)
 }
 
 let hostOwner: ReturnType<typeof getOwner> = null
@@ -3390,10 +3392,11 @@ function createApi(ctx: Plugin.Context) {
           const res = await ctx.client.session.fork({ sessionID: req.sessionID })
           return { data: res }
         },
-        async messages(req: { sessionID: string; preview?: boolean }) {
+        async messages(req: { sessionID: string; preview?: boolean; active?: () => boolean }) {
           let cursor: string | undefined
           const all = []
           do {
+            if (req.active && !req.active()) break
             const res = await ctx.client.message.list({ sessionID: req.sessionID, order: req.preview ? "desc" : "asc", limit: 100, cursor })
             all.push(...res.data)
             const next = res.cursor.next

@@ -1,15 +1,16 @@
 {
   "compilerOptions": {
     "target": "ESNext",
+    "lib": ["ESNext", "DOM"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "preserve",
     "jsxImportSource": "@opentui/solid",
+    "allowImportingTsExtensions": true,
     "types": ["node"],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "allowImportingTsExtensions": true,
     "forceConsistentCasingInFileNames": true
   },
   "include": ["tui-plugins/**/*.tsx", "tui-plugins/**/*.ts", "plugins/**/*.ts"]

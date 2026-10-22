@@ -16,15 +16,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       - run: bun install --frozen-lockfile
-      - run: bun run build
       - name: Install test tools
-        run: sudo apt-get update && sudo apt-get install -y jq sqlite3 shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Syntax check
         run: for script in bin/*.sh bin/sesh install.sh tests/*.sh scripts/*.sh; do bash -n "$script"; done
       - name: ShellCheck (errors)
-        run: shellcheck -x --severity=error bin/*.sh bin/sesh install.sh tests/sesh.sh tests/changelog.sh scripts/changelog.sh
-      - name: Regression suite
-        run: ./tests/sesh.sh
+        run: shellcheck -x --severity=error bin/*.sh bin/sesh install.sh tests/*.sh scripts/changelog.sh
       - name: Changelog tooling
         run: ./tests/changelog.sh
       - name: CHANGELOG structure
@@ -37,7 +34,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       - run: bun install --frozen-lockfile
-      - run: bun run build
+      - name: Install test tools
+        run: sudo apt-get update && sudo apt-get install -y jq sqlite3
+      - run: bun run test:unit
       - run: bun run typecheck
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:

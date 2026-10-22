@@ -6,7 +6,7 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { mkdtempSync, readFileSync, rmSync, mkdirSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { tmpdir, homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { DatabaseSync } from "node:sqlite"
@@ -103,6 +103,9 @@ try {
     INSERT INTO session_v2 (id, parent_id, directory, title, time_created, time_updated, time_archived) VALUES ('ses_arch', NULL, '/dir/b', 'Archived', 300, 300, 300);
   `)
   sqlite.close()
+  const roots = new DatabaseSync(dbPath)
+  roots.exec("UPDATE session_v2 SET parent_id = '' WHERE id = 'ses_old'")
+  roots.close()
 
   // Create a minimal bun:sqlite compatible wrapper file
   const wrapperFile = join(dir, "sqlite-shim.mjs")
@@ -124,6 +127,30 @@ try {
     }
   `
   await import("node:fs/promises").then((fs) => fs.writeFile(wrapperFile, wrapperCode))
+
+  const pathWrapperFile = join(dir, "sqlite-path-shim.mjs")
+  await import("node:fs/promises").then((fs) => fs.writeFile(pathWrapperFile, `
+    export class Database {
+      constructor(path) { this.path = path }
+      query() { return { all: () => [{ path: this.path }] } }
+    }
+  `))
+  const pathPlugin = await loadTool(pathWrapperFile)
+  let pathTool
+  await pathPlugin.setup({ tool: { transform(cb) { cb({ add(t) { pathTool = t } }) } } })
+  const savedPathEnv = { SESH_DB: process.env.SESH_DB, XDG_DATA_HOME: process.env.XDG_DATA_HOME, SESH_OPENCODE: process.env.SESH_OPENCODE }
+  try {
+    delete process.env.SESH_DB
+    process.env.XDG_DATA_HOME = ""
+    process.env.SESH_OPENCODE = join(dir, "missing-opencode")
+    const pathResult = await pathTool.execute({ limit: 1 })
+    assert.equal(JSON.parse(pathResult.content)[0].path, join(homedir(), ".local", "share", "opencode", "opencode.db"))
+  } finally {
+    for (const [key, value] of Object.entries(savedPathEnv)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
 
   const testPlugin = await loadTool(wrapperFile)
   let runtimeTool = null

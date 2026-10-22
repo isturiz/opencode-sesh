@@ -28,7 +28,7 @@ PLUGIN_VERSION_FALLBACK="2.0.25"
 # Peer line the panel was developed and typechecked against. A checkout's
 # package.json overrides these, so dependency bumps cannot drift the installed
 # config out of sync (solid-js moves with OpenTUI via @opentui/keymap's peer).
-OPENTUI_RANGE="^0.5.11"
+OPENTUI_RANGE="^0.6.5"
 SOLID_VERSION="1.9.15"
 if [ -f "$SOURCE_DIR/package.json" ] && command -v jq >/dev/null 2>&1; then
   opentui_range=$(jq -r '.devDependencies["@opentui/solid"] // empty' "$SOURCE_DIR/package.json" 2>/dev/null || true)
@@ -111,22 +111,28 @@ remove_opencode_entry() {
 }
 
 # The launcher is a symlink we create. Treat it as ours only when it resolves to
-# a sesh launcher, so a foreign symlink is never replaced on install nor deleted
-# on uninstall. Recognized by the exact source path, a `.../bin/sesh` target, or
-# the marker in the target file (covers npm upgrades and a moved checkout).
+# our source or an opencode-sesh package, including relative npm symlinks.
 launcher_is_ours() {
-  local link=$1 target
+  local link=$1 target hops=0 package directory
   [ -L "$link" ] || return 1
-  target=$(readlink "$link" 2>/dev/null) || return 1
-  [ -n "$target" ] || return 1
-  case "$target" in
-    /*) ;;
-    *) target="$(cd "$(dirname "$link")" && pwd -P)/$target" ;;
-  esac
-  case "$target" in
-    "$SOURCE_DIR/bin/sesh"|*/bin/sesh) return 0 ;;
-  esac
-  [ -f "$target" ] && grep -qF 'Pick an opencode session' "$target" 2>/dev/null
+  while [ -L "$link" ]; do
+    hops=$((hops + 1))
+    [ "$hops" -le 40 ] || return 1
+    target=$(readlink "$link" 2>/dev/null) || return 1
+    [ -n "$target" ] || return 1
+    case "$target" in
+      /*) link=$target ;;
+      *) link="$(dirname "$link")/$target" ;;
+    esac
+  done
+  directory=$(cd "$(dirname "$link")" 2>/dev/null && pwd -P) || return 1
+  target="$directory/$(basename "$link")"
+  [ "$target" = "$SOURCE_DIR/bin/sesh" ] && return 0
+  [ -f "$target" ] || return 1
+  case "$target" in */bin/sesh) ;; *) return 1 ;; esac
+  package="${target%/bin/sesh}/package.json"
+  command -v jq >/dev/null 2>&1 && [ -f "$package" ] &&
+    jq -e '.name == "opencode-sesh" and .bin.sesh == "bin/sesh"' "$package" >/dev/null 2>&1
 }
 
 install_file() {
@@ -152,10 +158,9 @@ install_tui_panel() {
   fi
   plugin_version="${opencode_version:-$PLUGIN_VERSION_FALLBACK}"
 
-  local opencode_created=0 opencode_tmp=''
+  local opencode_tmp=''
   if [ ! -f "$OPENCODE_JSON" ]; then
     printf '{\n  "$schema": "https://opencode.ai/config.json",\n  "plugins": []\n}\n' > "$OPENCODE_JSON"
-    opencode_created=1
     note "created $OPENCODE_JSON"
   fi
   opencode_tmp=$(mktemp "${TMPDIR:-/tmp}/sesh-opencode.XXXXXX")
@@ -181,10 +186,9 @@ install_tui_panel() {
   # Local plugins resolve their imports from the config directory, and opencode
   # runs `bun install` there at startup. Keep the required packages declared
   # without clobbering versions the user already pinned.
-  local pkg_created=0 pkg_tmp=''
+  local pkg_tmp=''
   if [ ! -f "$PACKAGE_JSON" ]; then
     printf '{\n  "dependencies": {}\n}\n' > "$PACKAGE_JSON"
-    pkg_created=1
     note "created $PACKAGE_JSON"
   fi
   pkg_tmp=$(mktemp "${TMPDIR:-/tmp}/sesh-pkg.XXXXXX")
@@ -267,6 +271,7 @@ if [ "$SYNC_PANEL" = 1 ]; then
   # touching the launcher or requiring fzf/sqlite. No-op when the panel is
   # absent, so `npm install` never adds a TUI panel on its own.
   [ -f "$PANEL_DST" ] || { note "sesh sidebar panel is not installed; nothing to sync."; exit 0; }
+  command -v jq >/dev/null 2>&1 || fail "required tool 'jq' is unavailable; install jq and rerun bash install.sh --sync-panel."
   umask 077
   install_tui_panel
   note_restart

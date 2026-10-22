@@ -33,18 +33,10 @@ release_lock() {
   rmdir "$lock" 2>/dev/null || true
   lock_owned=0
 }
-# Mirrors the acquirer in sesh-list.sh, including its stale-owner
-# recovery. Recovery is conservative -- an unreadable or non-numeric owner,
-# or one still alive, always loses the race.
+# Only the owner removes a lock; stale reclamation can race a new owner.
 acquire_lock() {
   if mkdir "$lock" 2>/dev/null; then printf '%s\n' "$$" > "$lock/pid"; return 0; fi
-  local owner=''; [ -f "$lock/pid" ] && owner=$(cat "$lock/pid" 2>/dev/null || true)
-  case "$owner" in ''|*[!0-9]*) return 1;; esac
-  kill -0 "$owner" 2>/dev/null && return 1
-  rm -f "$lock/pid" 2>/dev/null || return 1
-  rmdir "$lock" 2>/dev/null || return 1
-  mkdir "$lock" 2>/dev/null || return 1
-  printf '%s\n' "$$" > "$lock/pid"
+  return 1
 }
 
 # fzf passes an empty second field for headers and notices. They are never
@@ -77,9 +69,9 @@ fi
 # Serialize this action with the sole snapshot publisher. A short collision
 # is safer than deleting against a moving snapshot.
 if ! acquire_lock; then
-  echo "Session list is refreshing; try deletion again in a moment."
+  printf 'sesh: refresh lock is busy: %s; if it persists, stop all sesh pickers before removing this lock directory\n' "$lock" >&2
   pause
-  exit 0
+  exit 75
 fi
 lock_owned=1
 trap 'release_lock' EXIT

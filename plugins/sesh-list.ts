@@ -6,7 +6,7 @@ import { join } from "node:path"
 
 function dbPath(): string {
   if (process.env.SESH_DB) return process.env.SESH_DB
-  const xdgPath = join(process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "opencode", "opencode.db")
+  const xdgPath = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "opencode.db")
   if (existsSync(xdgPath)) return xdgPath
   try {
     const result = spawnSync(process.env.SESH_OPENCODE ?? "opencode", ["debug", "paths"], { encoding: "utf8" })
@@ -59,7 +59,7 @@ export default Plugin.define({
             const scoped = typeof args.directory === "string" && args.directory.length > 0
             const query = `SELECT id, title, directory, time_updated AS updated, time_created AS created
               FROM session_v2
-              WHERE parent_id IS NULL AND COALESCE(time_archived, 0) = 0${scoped ? " AND directory = ?" : ""}
+              WHERE COALESCE(parent_id, '') = '' AND COALESCE(time_archived, 0) = 0${scoped ? " AND directory = ?" : ""}
               ORDER BY time_updated DESC, id DESC
               LIMIT ${limit}`
             const rows = scoped ? db.query(query).all(args.directory) : db.query(query).all()

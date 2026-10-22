@@ -123,7 +123,7 @@ scripts/changelog.sh check              # structure: headings and compare links
 `bun run test:changelog` covers the tooling, and `check` also runs in CI: every
 released heading needs its link definition.
 
-## Reporting bugs and requesting features
+## Reporting bugs
 
 Use the issue templates. For bugs, include your OS, `opencode` and `fzf`
 versions, and the steps to reproduce.

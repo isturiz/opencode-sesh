@@ -10,7 +10,8 @@ export SESH_CACHE_DIR="$fixture/cache"
 export SESH_PINS_FILE="$fixture/pins.json"
 export SESH_DB="$fixture/opencode.db"
 export SESH_JQ=${SESH_JQ:-$(command -v jq)}
-export SESH_SQLITE=$(command -v sqlite3)
+SESH_SQLITE=$(command -v sqlite3)
+export SESH_SQLITE
 # Force the plain-text preview path: glow restyles markdown headings, which
 # would hide the literal role markers asserted below.
 export SESH_GLOW=/nonexistent/glow
@@ -110,6 +111,11 @@ awk -F'\t' -v one="$one" '$6 == "hdr:" one { exit(NR != 1) }' "$fixture/pinned-s
 "$SESH_JQ" -e '.sessions == [] and .directories == []' "$SESH_PINS_FILE" > /dev/null
 mkdir "$SESH_PINS_FILE.lock"
 printf '99999999\n' > "$SESH_PINS_FILE.lock/pid"
+if "$pins" toggle-session ses_alpha > /dev/null 2> "$fixture/dead-pins-error"; then echo 'reclaimed a dead pins lock' >&2; exit 1; fi
+grep -Fq 'stop all sesh' "$fixture/dead-pins-error"
+[ "$(cat "$SESH_PINS_FILE.lock/pid")" = 99999999 ]
+rm "$SESH_PINS_FILE.lock/pid"
+rmdir "$SESH_PINS_FILE.lock"
 "$pins" toggle-session ses_alpha > /dev/null
 "$SESH_JQ" -e '.sessions == ["ses_alpha"]' "$SESH_PINS_FILE" > /dev/null
 "$pins" toggle-session ses_alpha > /dev/null
@@ -219,13 +225,17 @@ perm_state="$fixture/perm-state"; perm_cache="$fixture/perm-cache"
 [ "$(mode "$perm_cache/extractions")" = 700 ]
 [ "$(mode "$perm_cache/extractions/ses_alpha.json")" = 600 ]
 chmod 644 "$perm_cache/extractions/ses_alpha.json"
+printf 'possibly active writer\n' > "$perm_cache/extractions/ses_orphan.json.ABCDEF"
+chmod 644 "$perm_cache/extractions/ses_orphan.json.ABCDEF"
 ( umask 022; SESH_CACHE_DIR="$perm_cache" "$list" --refresh --state-dir "$perm_state" > /dev/null )
 [ "$(mode "$perm_cache/extractions/ses_alpha.json")" = 600 ]
+[ "$(cat "$perm_cache/extractions/ses_orphan.json.ABCDEF")" = 'possibly active writer' ]
+[ "$(mode "$perm_cache/extractions/ses_orphan.json.ABCDEF")" = 600 ]
 
 # 10. A missing database reports unavailable instead of crashing.
 export SESH_DB="$fixture/nonexistent.db"
 missing="$fixture/missing"
-"$list" --refresh --state-dir "$missing" > "$fixture/missing.tsv"
+if "$list" --refresh --state-dir "$missing" > "$fixture/missing.tsv"; then echo 'missing database refresh succeeded' >&2; exit 1; fi
 [ "$(cat "$missing/status")" = 'unavailable: opencode database is unavailable' ]
 
 # --- P2 regressions -------------------------------------------------------
@@ -409,6 +419,7 @@ tool_msg() { # session msg tool status created
 now_ms=$(($(date +%s) * 1000))
 recent=$((now_ms - 300000))
 add_session 'ses_waitq' "$one" 'Waiting question' 1600000000000 1600000100000
+sqlite3 "$SESH_DB" "UPDATE session_v2 SET parent_id = '' WHERE id = 'ses_waitq';"
 add_part 'ses_waitq' 'msg_wq0' 'user' 'text' 'should I refactor' 1600000050000
 tool_msg 'ses_waitq' 'msg_wq1' 'question' 'pending' 1600000100000
 add_session 'ses_waitok' "$one" 'Answered question' 1600000000000 1600000100000
@@ -444,6 +455,7 @@ grep -Fq 'Stuck parent' "$fixture/waiting.txt" && { echo "stuck parent with rece
 # 23. Prune deletes stale sessions only: never pinned, waiting, fresh or
 # already archived ones. Non-TTY runs need --yes; --dry-run changes nothing.
 add_session 'ses_pruneold' "$one" 'Prune me' 1600000000000 1600000100000
+sqlite3 "$SESH_DB" "UPDATE session_v2 SET parent_id = '' WHERE id = 'ses_pruneold';"
 add_part 'ses_pruneold' 'msg_po0' 'user' 'text' 'old work' 1600000100000
 add_session 'ses_prunepin' "$one" 'Pinned old' 1600000000000 1600000100000
 add_part 'ses_prunepin' 'msg_pp0' 'user' 'text' 'pinned work' 1600000100000
@@ -553,6 +565,79 @@ child_state="$fixture/child-state"
 "$SESH_JQ" -s -e '([.[] | .sessionId] | index("ses_childold") | not)' "$child_state/snapshot.jsonl" >/dev/null
 "$list" --refresh --state-dir "$child_state" --archived > /dev/null
 "$SESH_JQ" -s -e '([.[] | .sessionId] | index("ses_childold") != null)' "$child_state/snapshot.jsonl" >/dev/null
+
+# 29. Corrupt protection data must never be replaced or permit pruning.
+cp "$SESH_PINS_FILE" "$fixture/pins-saved.json"
+before_prune=$(session_set)
+for corrupt in '{' 'null' '{}' '{"sessions":null,"directories":[]}' '{"sessions":[]}' '{"sessions":"bad","directories":[]}' '{"sessions":[42],"directories":[]}'; do
+  printf '%s\n' "$corrupt" > "$SESH_PINS_FILE"
+  if "$pins" toggle-session ses_alpha >/dev/null 2>&1; then echo 'corrupt pins accepted' >&2; exit 1; fi
+  [ "$(cat "$SESH_PINS_FILE")" = "$corrupt" ]
+  if "$prune" --yes >/dev/null 2>&1; then echo 'prune ignored corrupt pins' >&2; exit 1; fi
+  [ "$(session_set)" = "$before_prune" ]
+done
+rm "$SESH_PINS_FILE"
+ln -s "$fixture/missing-pins.json" "$SESH_PINS_FILE"
+if "$pins" toggle-session ses_alpha >/dev/null 2>&1; then echo 'dangling pins symlink accepted' >&2; exit 1; fi
+if "$prune" --yes >/dev/null 2>&1; then echo 'prune ignored dangling pins symlink' >&2; exit 1; fi
+[ -L "$SESH_PINS_FILE" ] && [ ! -e "$fixture/missing-pins.json" ]
+[ "$(session_set)" = "$before_prune" ]
+rm "$SESH_PINS_FILE"
+mv "$fixture/pins-saved.json" "$SESH_PINS_FILE"
+cat > "$fixture/fail-waiting" <<EOF
+#!/bin/bash
+case "\$*" in *'s.parent_id'*) exit 1;; esac
+exec "$SESH_SQLITE" "\$@"
+EOF
+chmod +x "$fixture/fail-waiting"
+if SESH_SQLITE="$fixture/fail-waiting" "$prune" --yes >/dev/null 2>&1; then echo 'prune ignored waiting query failure' >&2; exit 1; fi
+[ "$(session_set)" = "$before_prune" ]
+
+# 30. Invalid caches are rebuilt, and early refresh exits release their lock.
+printf '{}\n' > "$SESH_CACHE_DIR/extractions/ses_ranktitle.json"
+"$list" --refresh --state-dir "$rank_state" >/dev/null
+"$SESH_JQ" -e '.sessionId == "ses_ranktitle"' "$SESH_CACHE_DIR/extractions/ses_ranktitle.json" >/dev/null
+if SESH_DB="$fixture/missing.db" "$list" --refresh --state-dir "$fixture/missing-state" >/dev/null; then echo 'missing database refresh succeeded' >&2; exit 1; fi
+[ ! -e "$fixture/missing-state/refresh.lock" ]
+for option in --limit --query --state-dir --wait-lock --selected-id; do
+  if "$list" --state-dir "$rank_state" "$option" > /dev/null 2> "$fixture/arg-error"; then echo "accepted missing $option argument" >&2; exit 1; fi
+  grep -Fq -- "$option requires an argument" "$fixture/arg-error"
+done
+for option in --limit --query; do
+  if "$PACKAGE_DIR/bin/sesh.sh" "$option" >/dev/null 2> "$fixture/arg-error"; then echo "accepted missing picker $option argument" >&2; exit 1; fi
+  grep -Fq -- "$option requires an argument" "$fixture/arg-error"
+done
+printf '{"scope":"","limit":-1}\n' > "$fixture/missing-state/settings.json"
+if "$list" --state-dir "$fixture/missing-state" >/dev/null 2>&1; then echo 'invalid persisted limit accepted' >&2; exit 1; fi
+
+# 31. A completed partial index is usable for selection, unlike a failed scan.
+worker="$PACKAGE_DIR/bin/sesh-refresh-worker.sh"
+wait_state="$fixture/wait-state"
+"$worker" init --state-dir "$wait_state"
+printf '1\n' > "$wait_state/worker-complete"
+printf 'stale: transcript extraction incomplete; refresh to retry\n' > "$wait_state/status"
+"$worker" wait --state-dir "$wait_state" --target 1 --timeout 1
+printf 'stale: refresh worker scan failed\n' > "$wait_state/status"
+if "$worker" wait --state-dir "$wait_state" --target 1 --timeout 1; then echo 'failed scan accepted' >&2; exit 1; fi
+
+# 32. Dead locks are never reclaimed, including by simultaneous contenders.
+cp "$SESH_PINS_FILE" "$fixture/pins-before-lock.json"
+mkdir "$SESH_PINS_FILE.lock" "$rank_state/refresh.lock"
+printf '99999999\n' > "$SESH_PINS_FILE.lock/pid"
+printf '99999999\n' > "$rank_state/refresh.lock/pid"
+"$pins" toggle-session ses_locka >/dev/null 2>&1 & pin_a=$!
+"$pins" toggle-session ses_lockb >/dev/null 2>&1 & pin_b=$!
+"$list" --refresh --wait-lock 1 --state-dir "$rank_state" >/dev/null 2>&1 & list_pid=$!
+"$PACKAGE_DIR/bin/sesh-delete.sh" --yes "$rank_state" ses_ranktitle </dev/null >/dev/null 2>&1 & delete_pid=$!
+for contender in "$pin_a" "$pin_b" "$list_pid" "$delete_pid"; do
+  if wait "$contender"; then echo 'dead-lock contender succeeded' >&2; exit 1; fi
+done
+cmp "$SESH_PINS_FILE" "$fixture/pins-before-lock.json"
+[ "$(cat "$SESH_PINS_FILE.lock/pid")" = 99999999 ]
+[ "$(cat "$rank_state/refresh.lock/pid")" = 99999999 ]
+[ "$(session_set)" = "$before_prune" ]
+rm "$SESH_PINS_FILE.lock/pid" "$rank_state/refresh.lock/pid"
+rmdir "$SESH_PINS_FILE.lock" "$rank_state/refresh.lock"
 
 # Agent tool contract checks (global store, filter-before-limit) need Node.
 if command -v node >/dev/null 2>&1; then

@@ -5,6 +5,8 @@
 // functions are extracted and evaluated with stubbed client/readFile.
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
+import * as fs from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { DatabaseSync } from "node:sqlite"
@@ -33,7 +35,7 @@ if (typeof stripTypeScriptTypes !== "function") {
   process.exit(0)
 }
 
-function loadDataLayer(readExtraction = async () => { throw new Error("no local cache") }) {
+function loadDataLayer(readExtraction = async () => { throw new Error("no local cache") }, runtime = {}) {
   const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   const start = source.indexOf("function shortDir")
   const end = source.indexOf("const TRANSCRIPT_PREVIEW_TURNS")
@@ -43,13 +45,16 @@ function loadDataLayer(readExtraction = async () => { throw new Error("no local 
     "readFile",
     "process",
     "setTimeout",
+    "setInterval", "clearInterval", "POLL_MS", "existsSync", "spawnSync",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, addTranscript, createSessionPoll, resolveDbPath, openInCmuxWorkspace, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu }`,
   )
   return factory(
     readExtraction,
     { env: { HOME: "/nonexistent", SESH_CACHE_DIR: "/nonexistent/cache" } },
     setTimeout,
+    runtime.setInterval ?? setInterval, runtime.clearInterval ?? clearInterval, 15_000,
+    runtime.existsSync ?? (() => false), runtime.spawnSync ?? (() => ({ status: 1 })),
   )
 }
 
@@ -512,7 +517,7 @@ function makeApi(sessions, { latency = 0 } = {}) {
     { type: "tool", text: "SECRET_TOOL" }, { type: "reasoning", text: "SECRET_REASONING" },
     { type: "text", text: "Visible transcript match" },
   ] }] }) } } }, [entry])
-  assert.match(transcriptMatchExcerpt(remote.get(entry.id), entry, "visible"), /visible/)
+  assert.match(transcriptMatchExcerpt(remote.get(entry.id), entry, "visible"), /Visible/)
   assert.equal(transcriptMatchExcerpt(remote.get(entry.id), entry, "SECRET_TOOL"), undefined)
   assert.equal(transcriptMatchExcerpt(remote.get(entry.id), entry, "SECRET_REASONING"), undefined)
   const other = { ...entry, id: "ses_other", group: "elsewhere", title: "Other" }
@@ -834,6 +839,187 @@ function makeApi(sessions, { latency = 0 } = {}) {
   const { entries, truncated } = await fetchEntries(api)
   assert.equal(entries.length, SESSION_MAX)
   assert.equal(truncated, true)
+}
+
+// Cancellation stops new pages/workers, including message pagination inside a
+// single remote transcript. Search must still walk all pages while active.
+{
+  let active = true
+  const requests = []
+  const api = loadAdapter({ client: { message: { async list(input) {
+    requests.push(input)
+    active = false
+    return { data: [{ id: "one", type: "user", text: "Original Case" }], cursor: { next: "next" } }
+  } } } })
+  await api.client.session.messages({ sessionID: "ses_cancel", active: () => active })
+  assert.equal(requests.length, 1)
+
+  active = true
+  const sessions = makeApi(sessionsFor(401))
+  const list = sessions.client.experimental.session.list
+  sessions.client.experimental.session.list = async (input) => {
+    const page = await list(input)
+    active = false
+    return page
+  }
+  await fetchEntries(sessions, () => active)
+  assert.equal(sessions.calls.list.length, 1)
+
+  active = true
+  const entries = (await fetchEntries(makeApi(sessionsFor(64)))).entries
+  let remoteCalls = 0
+  const progress = []
+  await buildSearchIndex({ client: { session: { async messages(input) {
+    assert.equal(input.preview, undefined, "transcript search must not request a truncated preview")
+    assert.equal(typeof input.active, "function")
+    remoteCalls++
+    active = false
+    return { data: [] }
+  } } } }, entries, (value) => progress.push(value), () => active)
+  assert.equal(remoteCalls, 1, "cancelled workers must not claim more sessions")
+  assert.ok(progress.every((value) => !value.complete))
+  const cancelled = loadDataLayer(async () => { active = false; throw new Error("cache unavailable") })
+  active = true
+  await cancelled.buildSearchIndex({ client: { session: { messages() { throw new Error("must not request after cancellation") } } } }, entries, undefined, () => active)
+}
+
+// Original text survives both local extraction and remote indexing; matching
+// remains case-insensitive and ignores metadata when selecting an excerpt.
+{
+  const data = loadDataLayer()
+  const entry = { id: "ses_case", title: "Original Title", dir: "/Case", group: "Case" }
+  const index = new Map([[entry.id, `${entry.title} ${entry.dir}`]])
+  data.addTranscript(index, entry.id, JSON.stringify({ text: "Read README.md and Use GitHub" }))
+  assert.match(data.transcriptMatchExcerpt(index.get(entry.id), entry, "readme"), /README\.md/)
+  assert.deepEqual(data.filterPickerEntries([entry], { query: "GITHUB" }, index, new Set(), []), [entry])
+  const toasts = []
+  data.openInCmuxWorkspace({ ui: { toast: (value) => toasts.push(value) } }, { ...entry, id: "ses_bad;touch injected" })
+  assert.equal(toasts[0].message, "Invalid session ID")
+}
+
+// A successful fallback path is resolved once; unsuccessful resolution retries.
+{
+  let calls = 0
+  const data = loadDataLayer(undefined, {
+    existsSync: (path) => path === "/resolved/opencode.db",
+    spawnSync: () => { calls++; return { status: 0, stdout: "db /resolved/opencode.db\n" } },
+  })
+  assert.equal(data.resolveDbPath(), "/resolved/opencode.db")
+  assert.equal(data.resolveDbPath(), "/resolved/opencode.db")
+  assert.equal(calls, 1)
+}
+
+// Sidebar/home share a single flight and timer. Unchanged rows retain identity,
+// and the last unsubscribe stops polling without affecting other subscribers.
+{
+  let tick
+  let timers = 0
+  let clears = 0
+  const data = loadDataLayer(undefined, {
+    setInterval: (callback) => { tick = callback; timers++; return 1 },
+    clearInterval: () => { clears++ },
+  })
+  const api = makeApi(sessionsFor(2))
+  const list = api.client.experimental.session.list
+  let release
+  api.client.experimental.session.list = async (input) => {
+    await new Promise((resolve) => { release = resolve })
+    return list(input)
+  }
+  let refreshes = 0
+  const subscribe = data.createSessionPoll(api, () => refreshes++)
+  const seen = []
+  const first = subscribe((snapshot) => seen.push(snapshot))
+  const second = subscribe(() => {})
+  await delay(0)
+  tick()
+  assert.equal(refreshes, 1)
+  assert.equal(timers, 1)
+  release()
+  await delay(10)
+  const entries = seen.at(-1).entries
+  assert.equal(entries.length, 2)
+  tick()
+  await delay(0)
+  release()
+  await delay(10)
+  assert.equal(seen.at(-1).entries, entries)
+  first()
+  assert.equal(clears, 0)
+  second()
+  assert.equal(clears, 1)
+  tick()
+  assert.equal(refreshes, 2)
+}
+
+// Mutation fails closed for corrupt/unreadable existing pins; only an absent
+// file starts empty. Use real files so failed toggles prove bytes are preserved.
+{
+  const dir = await fs.mkdtemp(join(tmpdir(), "sesh-tui-pins-"))
+  const file = join(dir, "pins.json")
+  try {
+    const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
+    const code = source.slice(source.indexOf("type Pins ="), source.indexOf("function pinnedFirst"))
+    const names = ["lstat", "mkdir", "readFile", "rename", "rmdir", "unlink", "writeFile"]
+    const pins = new Function(...names, "join", "dirname", "process", `${stripTypeScriptTypes(code)}; return { readPins, togglePin }`)(
+      ...names.map((name) => fs[name]), join, dirname, { env: { SESH_PINS_FILE: file }, pid: process.pid, kill: process.kill.bind(process) },
+    )
+    assert.deepEqual(await pins.togglePin("sessions", "ses_first"), { sessions: ["ses_first"], directories: [] })
+    for (const malformed of ["not json", "null", "[]", '{}', '{"sessions":null,"directories":[]}', '{"sessions":[]}', '{"sessions":[7],"directories":[]}', '{"sessions":[],"directories":"bad"}']) {
+      await fs.writeFile(file, malformed)
+      assert.deepEqual(await pins.readPins(), { sessions: [], directories: [] })
+      await assert.rejects(pins.togglePin("sessions", "ses_second"))
+      assert.equal(await fs.readFile(file, "utf8"), malformed)
+      await assert.rejects(fs.stat(`${file}.lock`), { code: "ENOENT" })
+    }
+    await fs.unlink(file)
+    await fs.symlink(join(dir, "missing"), file)
+    await assert.rejects(pins.togglePin("sessions", "ses_second"))
+    assert.ok((await fs.lstat(file)).isSymbolicLink())
+    await fs.unlink(file)
+    await fs.writeFile(file, '{"sessions":[],"directories":[]}\n')
+    await fs.mkdir(`${file}.lock`)
+    await fs.writeFile(`${file}.lock/pid`, "99999999\n")
+    const contenders = await Promise.allSettled([
+      pins.togglePin("sessions", "ses_second"), pins.togglePin("sessions", "ses_third"),
+    ])
+    assert.ok(contenders.every((result) => result.status === "rejected" && /stop all sesh/.test(result.reason.message)))
+    assert.equal(await fs.readFile(`${file}.lock/pid`, "utf8"), "99999999\n")
+    assert.deepEqual(await pins.readPins(true), { sessions: [], directories: [] })
+    await fs.unlink(`${file}.lock/pid`)
+    await fs.rmdir(`${file}.lock`)
+    await Promise.all([pins.togglePin("sessions", "ses_second"), pins.togglePin("sessions", "ses_third")])
+    assert.deepEqual((await pins.readPins(true)).sessions.sort(), ["ses_second", "ses_third"])
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+}
+
+// Fractional wheel deltas accumulate instead of disappearing. Internal search
+// clicks stop propagation, so no stale flag may swallow the next outside click.
+{
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
+  const start = source.indexOf("let scrollRemainder =")
+  const end = source.indexOf("// Delete confirmation lives", start)
+  let viewport = 10
+  const scroll = new Function("showPreview", "setViewportStart", "maxViewportStart", `${stripTypeScriptTypes(source.slice(start, end))}; return scrollPicker`)(
+    () => false, (update) => { viewport = update(viewport) }, () => 100,
+  )
+  for (let i = 0; i < 4; i++) scroll({ direction: "down", delta: 0.25 })
+  assert.equal(viewport, 11)
+  scroll({ direction: "up", delta: 1.5 })
+  scroll({ direction: "up", delta: 0.5 })
+  assert.equal(viewport, 9)
+  assert.doesNotMatch(source, /insideSearchBox|remaining\(\)/)
+  const sidebar = source.slice(source.indexOf("function SidebarSessions"), source.indexOf("const HOME_SESSION_LIMIT"))
+  const nav = sidebar.slice(sidebar.indexOf("if (!navActive()) return"))
+  assert.doesNotMatch(nav.slice(0, nav.indexOf("onCleanup")), /key: "[yn]"/)
+  assert.match(sidebar, /if \(navActive\(\)\) return\s+const entry = hoveredEntry\(\)/)
+  for (const [from, to] of [["function SidebarSessions", "const HOME_SESSION_LIMIT"], ["function HomeSessions", "const tui:"], ["const cleanup = () => {\n      if (!alive)", "api.ui.dialog.replace"]]) {
+    const segment = source.slice(source.indexOf(from), source.indexOf(to, source.indexOf(from)))
+    assert.match(segment, /if \(confirmTimer\) clearTimeout\(confirmTimer\)/)
+  }
+  assert.match(source, /onCleanup\(disposePickerKey\)/)
 }
 
 console.log("tui data-layer tests passed")
