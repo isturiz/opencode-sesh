@@ -264,6 +264,8 @@ when opencode exits, the picker reopens with the query preserved.
   history in a temp dir (included in `bun run test`).
 - `bun run test:picker` — PTY suite driving the real fzf picker (needs fzf
   and Python 3).
+- `bun run test:tui-home` — real OpenTUI render regressions for the home list
+  (also run by `bun run test`).
 - `bun run typecheck` — `tsc` over `tui-plugins/` and `plugins/`.
 - `bun run lint:sh` — `bash -n` on every script.
 - `HOME=/tmp/fakehome bash install.sh` — installer smoke test.

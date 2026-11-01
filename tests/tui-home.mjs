@@ -14,7 +14,14 @@ const source = readFileSync(new URL("../tui-plugins/sesh-panel/tui.tsx", import.
 // source exports, files in dist, or installed plugin copies need changing.
 const fixture = `
 export function HomeFixture(props) {
-  // OpenCode 2.2's native home has a four-line logo (seven when stacked on
+  // Layout baseline: OpenCode 2.2.4, matching HOME_CHROME_ROWS in tui.tsx.
+  // Re-check both when upgrading OpenCode: this hand-built fixture does not
+  // automatically track changes to the host layout. Sources pinned to 2.2.4:
+  // https://github.com/anomalyco/opencode/blob/45898d0f8569225eb1ddb4ee13f8581b34dff311/packages/tui/src/routes/home.tsx
+  // https://github.com/anomalyco/opencode/blob/45898d0f8569225eb1ddb4ee13f8581b34dff311/packages/tui/src/component/prompt/index.tsx#L1676
+  // https://github.com/anomalyco/opencode/blob/45898d0f8569225eb1ddb4ee13f8581b34dff311/packages/tui/src/component/logo.tsx
+  // https://github.com/anomalyco/opencode/blob/45898d0f8569225eb1ddb4ee13f8581b34dff311/packages/tui/src/feature-plugins/home/footer.tsx
+  // The native home has a four-line logo (seven when stacked on
   // narrow terminals), and its textarea grows to max(6, terminal rows / 3).
   // Keep its chrome here too:
   // testing only an unpadded text node would leave several rows unaccounted for.

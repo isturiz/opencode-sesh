@@ -1819,6 +1819,14 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
 }
 
 const HOME_SESSION_LIMIT = 6
+// Layout baseline: OpenCode 2.2.4. Re-check these assumptions and the matching
+// tests/tui-home.mjs fixture when upgrading OpenCode: the fixture mirrors the
+// host layout, so it cannot detect upstream layout changes on its own.
+// Sources pinned to that release:
+// https://github.com/anomalyco/opencode/blob/45898d0f8569225eb1ddb4ee13f8581b34dff311/packages/tui/src/routes/home.tsx
+// https://github.com/anomalyco/opencode/blob/45898d0f8569225eb1ddb4ee13f8581b34dff311/packages/tui/src/component/prompt/index.tsx#L1676
+// https://github.com/anomalyco/opencode/blob/45898d0f8569225eb1ddb4ee13f8581b34dff311/packages/tui/src/component/logo.tsx
+// https://github.com/anomalyco/opencode/blob/45898d0f8569225eb1ddb4ee13f8581b34dff311/packages/tui/src/feature-plugins/home/footer.tsx
 // The native home needs room for its logo, composer chrome and status footer.
 // Reserve the editor's *maximum* height (one third of the terminal, at least
 // six lines), so typing/wrapping a prompt cannot push it into our footer.
